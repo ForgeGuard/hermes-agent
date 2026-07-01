@@ -28,6 +28,11 @@ const { installEmbedReferer } = require('./embed-referer.cjs')
 const { detectRemoteDisplay, isWindowsBinaryPathInWsl, isWslEnvironment } = require('./bootstrap-platform.cjs')
 const { runBootstrap } = require('./bootstrap-runner.cjs')
 const {
+  buildFirstRunChoiceRecord,
+  firstRunChoiceRequired,
+  normalizeFirstRunChoice
+} = require('./first-run-choice.cjs')
+const {
   buildSessionWindowUrl,
   chatWindowWebPreferences,
   createSessionWindowRegistry,
@@ -355,6 +360,11 @@ const BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, '.hermes-bootstr
 const BOOTSTRAP_MARKER_SCHEMA_VERSION = 1
 
 const DESKTOP_CONNECTION_CONFIG_PATH = path.join(app.getPath('userData'), 'connection.json')
+// Records the user's one-time first-run choice (local runtime vs external
+// Hermes backend). Lives in userData — NOT renderer localStorage — because main
+// must read it before the renderer loads to decide whether to eagerly start a
+// local backend. See first-run-choice.cjs for the record shape + gate.
+const DESKTOP_FIRST_RUN_CONFIG_PATH = path.join(app.getPath('userData'), 'first-run.json')
 const DESKTOP_UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'updates.json')
 const DESKTOP_WINDOW_STATE_PATH = path.join(app.getPath('userData'), 'window-state.json')
 // active-profile.json records which Hermes profile the desktop launches its
@@ -4704,6 +4714,94 @@ function writeDesktopConnectionConfig(config) {
   writeFileAtomic(DESKTOP_CONNECTION_CONFIG_PATH, JSON.stringify(config, null, 2))
   connectionConfigCache = config
   connectionConfigCacheMtime = fs.statSync(DESKTOP_CONNECTION_CONFIG_PATH).mtimeMs
+  // A connection-config change can flip hasExplicitRemoteTarget() (e.g. the user
+  // just pointed the desktop at a remote gateway), so the cached first-run
+  // decision must recompute on the next read rather than serve a stale value.
+  resetFirstRunChoiceDecision()
+}
+
+// Read the persisted first-run choice, or null when the user hasn't chosen yet
+// (fresh install) or the file is missing/malformed.
+function readFirstRunChoice() {
+  return normalizeFirstRunChoice(readJson(DESKTOP_FIRST_RUN_CONFIG_PATH))
+}
+
+// Persist the user's first-run choice ('local' | 'remote'). Throws on an
+// unknown choice (buildFirstRunChoiceRecord validates).
+function writeFirstRunChoice(choice) {
+  const record = buildFirstRunChoiceRecord(choice)
+  fs.mkdirSync(path.dirname(DESKTOP_FIRST_RUN_CONFIG_PATH), { recursive: true })
+  writeFileAtomic(DESKTOP_FIRST_RUN_CONFIG_PATH, JSON.stringify(record, null, 2) + '\n', 'utf8')
+  // A choice was just recorded — the next desktopFirstRunChoiceRequired() must
+  // recompute (and will now return false). The window reloads in the SAME
+  // process after a choice, so without this reset the stale cached `true` would
+  // keep every gate deferring forever.
+  resetFirstRunChoiceDecision()
+  return record
+}
+
+// True when an explicit external backend is already targeted: the env override,
+// a global remote in connection.json, or a per-profile remote override on the
+// primary profile. Any of these means the local-vs-remote decision is already
+// made, so we don't ask on first run.
+function hasExplicitRemoteTarget() {
+  if (process.env.HERMES_DESKTOP_REMOTE_URL) {
+    return true
+  }
+  const config = readDesktopConnectionConfig()
+  if (config.mode === 'remote') {
+    return true
+  }
+  return Boolean(profileRemoteOverride(config, primaryProfileKey()))
+}
+
+// Cached first-run decision. null = not yet computed. Computed ONCE per process
+// and reused by every gate (did-finish-load, the startHermes() gate, and the
+// hermes:first-run:get IPC). This is deliberate: the decision depends on
+// isActiveRuntimeUsable(), which spawns a Python import probe (execFileSync)
+// that returns false on timeout. Re-evaluating it on every call made the gates
+// disagree — one call saw the prior ~/.hermes install as usable ("not first
+// run", so startHermes spawned a backend) while a later call under boot load
+// timed out ("first run", so did-finish-load deferred). That split-brain
+// started a local backend AND parked the chooser, hanging the UI. Caching makes
+// all gates return the SAME answer for the life of the process. Reset when a
+// choice is recorded or the connection config changes (both happen in-process
+// before the window reload that re-drives boot).
+let _firstRunChoiceRequiredCache = null
+// One-time guard so the startHermes() sentinel block logs once per process,
+// not on every getConnection()/ensureBackend() retry while the chooser is up.
+let _firstRunSentinelLogged = false
+
+function resetFirstRunChoiceDecision() {
+  _firstRunChoiceRequiredCache = null
+  _firstRunSentinelLogged = false
+}
+
+// Whether the desktop should show the first-run local-vs-remote choice before
+// starting a backend. Bypassed for returning users (choice already recorded),
+// an explicit remote target, or an existing usable local install (desktop
+// bootstrap marker OR a CLI-installed runnable runtime). A dev source checkout
+// with no ~/.hermes install still asks — that is a genuine first run.
+function desktopFirstRunChoiceRequired() {
+  if (_firstRunChoiceRequiredCache === null) {
+    const choiceRecorded = Boolean(readFirstRunChoice())
+    const hasExplicitRemote = hasExplicitRemoteTarget()
+    const hasExistingLocalInstall = isBootstrapComplete() || isActiveRuntimeUsable()
+    _firstRunChoiceRequiredCache = firstRunChoiceRequired({
+      choiceRecorded,
+      hasExplicitRemote,
+      hasExistingLocalInstall
+    })
+    // Log the decision + its inputs exactly once (the result is cached for the
+    // life of the process). Makes a stuck-boot report unambiguous: whether the
+    // chooser should show, and which bypass signal (if any) suppressed it.
+    rememberLog(
+      `[boot] first-run choice decision: required=${_firstRunChoiceRequiredCache} ` +
+        `(choiceRecorded=${choiceRecorded}, hasExplicitRemote=${hasExplicitRemote}, ` +
+        `hasExistingLocalInstall=${hasExistingLocalInstall})`
+    )
+  }
+  return _firstRunChoiceRequiredCache
 }
 
 // Returns the desktop's chosen profile name, or null when unset. "default" is
@@ -5436,6 +5534,28 @@ async function prepareProfileDeleteRequest(request) {
 }
 
 async function startHermes() {
+  // First-run gate (authoritative). did-finish-load defers its own eager
+  // startHermes(), but the renderer also reaches this via getConnection AND via
+  // early hermes:api calls (status/config/sessions) through ensureBackend — any
+  // of those would otherwise spawn the local install/serve before the user has
+  // chosen local vs remote, and its boot-progress would drive the splash to 94%
+  // behind the chooser. Refuse here so NO path starts a local backend while a
+  // choice is required. This is safe for remote: desktopFirstRunChoiceRequired()
+  // is only true when there is no explicit remote target, so we never block a
+  // legitimate remote connection. Cleared once the choice is recorded (the
+  // renderer reloads after choosing, and this returns false thereafter).
+  if (desktopFirstRunChoiceRequired()) {
+    if (!_firstRunSentinelLogged) {
+      _firstRunSentinelLogged = true
+      rememberLog(
+        '[boot] startHermes() blocked: first-run choice required — no local backend will start until the user chooses'
+      )
+    }
+    const err = new Error('FIRST_RUN_CHOICE_REQUIRED: waiting for the first-run connection choice')
+    err.code = 'FIRST_RUN_CHOICE_REQUIRED'
+    throw err
+  }
+
   // Latched-failure short-circuit: once bootstrap has failed in this
   // process, every subsequent startHermes() call re-throws the same error
   // without re-running install.ps1. This prevents the renderer's
@@ -6011,6 +6131,17 @@ function createWindow() {
     restorePersistedZoomLevel(mainWindow)
     broadcastBootProgress()
     sendWindowStateChanged()
+    // First-run gate: on a truly fresh install (no prior choice, no explicit
+    // remote target, no existing local install) defer starting a local backend
+    // until the user picks "local runtime" or "external Hermes" in the renderer.
+    // Starting here would kick off the full local install before they can
+    // choose. The renderer reads hermes:first-run:get and drives the choice;
+    // completing it (local) or applying a remote config both reload the window,
+    // and this gate then lets startHermes() through.
+    if (desktopFirstRunChoiceRequired()) {
+      rememberLog('[boot] first-run choice required; deferring local backend startup until the user chooses')
+      return
+    }
     startHermes().catch(error => rememberLog(error.stack || error.message))
   })
 }
@@ -6251,6 +6382,15 @@ ipcMain.handle('hermes:bootstrap:cancel', async () => {
 })
 ipcMain.handle('hermes:boot-progress:get', async () => bootProgressState)
 ipcMain.handle('hermes:bootstrap:get', async () => getBootstrapState())
+// First-run local-vs-remote choice. `get` tells the renderer whether to show
+// the chooser before connecting; `complete` records the choice so subsequent
+// boots (and the post-choice window reload) proceed straight to startHermes().
+ipcMain.handle('hermes:first-run:get', async () => ({ required: desktopFirstRunChoiceRequired() }))
+ipcMain.handle('hermes:first-run:complete', async (_event, payload) => {
+  const choice = payload && typeof payload === 'object' ? payload.choice : payload
+  writeFirstRunChoice(choice)
+  return { ok: true, required: desktopFirstRunChoiceRequired() }
+})
 ipcMain.handle('hermes:connection-config:get', async (_event, profile) =>
   sanitizeDesktopConnectionConfig(readDesktopConnectionConfig(), profile)
 )
@@ -7532,6 +7672,18 @@ app.whenReady().then(() => {
   ensureWslWindowsFonts()
   configureSpellChecker()
   registerPowerResumeListeners()
+
+  // Compute the first-run decision ONCE, now — before createWindow() can let
+  // did-finish-load or any renderer-triggered startHermes()/ensureBackend() run
+  // the Python-probe-backed check under boot load (where a timeout would flip
+  // the answer). Every later gate reads this cached value, so they can't
+  // disagree and half-start a local backend behind the chooser.
+  try {
+    desktopFirstRunChoiceRequired()
+  } catch (error) {
+    rememberLog(`[boot] first-run decision precompute failed: ${error?.message || error}`)
+  }
+
   createWindow()
 
   // Win/Linux cold start: the launching hermes:// URL is in our own argv.

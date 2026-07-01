@@ -189,7 +189,14 @@ export const en: Translations = {
     connectedTitle: 'Client mode enabled',
     connectedMessage: 'Hermes Desktop will reconnect to the remote backend.',
     switchedLocalTitle: 'Local runtime enabled',
-    switchedLocalMessage: 'Hermes Desktop will restart its local backend.'
+    switchedLocalMessage: 'Hermes Desktop will restart its local backend.',
+    firstRunTitle: 'How would you like to use Hermes?',
+    firstRunDescription: 'Set up a private Hermes runtime on this machine, or connect to an existing Hermes backend.',
+    firstRunLocalDesc: 'Install and run Hermes on this machine. Works offline; recommended for most people.',
+    firstRunClientDesc: 'Skip the local install and connect to a Hermes backend that is already running elsewhere.',
+    firstRunSetUpLocal: 'Set up local Hermes',
+    firstRunLocalToastTitle: 'Setting up local Hermes',
+    firstRunLocalToastMessage: 'Hermes Desktop will install and start the local runtime.'
   },
 
   titlebar: {

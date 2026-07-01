@@ -232,6 +232,13 @@ export interface Translations {
     connectedMessage: string
     switchedLocalTitle: string
     switchedLocalMessage: string
+    firstRunTitle: string
+    firstRunDescription: string
+    firstRunLocalDesc: string
+    firstRunClientDesc: string
+    firstRunSetUpLocal: string
+    firstRunLocalToastTitle: string
+    firstRunLocalToastMessage: string
   }
 
   titlebar: {

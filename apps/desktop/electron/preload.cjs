@@ -45,6 +45,13 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     get: () => ipcRenderer.invoke('hermes:profile:get'),
     set: name => ipcRenderer.invoke('hermes:profile:set', name)
   },
+  firstRunChoice: {
+    // `get` → { required } : whether to show the local-vs-remote chooser before
+    // connecting. `complete(choice)` records 'local' | 'remote' so the app stops
+    // asking; the renderer reloads afterwards so main starts the chosen backend.
+    get: () => ipcRenderer.invoke('hermes:first-run:get'),
+    complete: choice => ipcRenderer.invoke('hermes:first-run:complete', { choice })
+  },
   api: request => ipcRenderer.invoke('hermes:api', request),
   notify: payload => ipcRenderer.invoke('hermes:notify', payload),
   requestMicrophoneAccess: () => ipcRenderer.invoke('hermes:requestMicrophoneAccess'),

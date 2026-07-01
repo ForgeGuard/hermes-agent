@@ -9,7 +9,11 @@ import type {
   DesktopConnectionConfigInput,
   DesktopConnectionProbeResult
 } from '@/global'
-import { $connectionModeDialog, openConnectionModeDialog } from '@/store/connection-mode'
+import {
+  $connectionModeDialog,
+  openConnectionModeDialog,
+  openFirstRunConnectionChoice
+} from '@/store/connection-mode'
 
 import { ConnectionModeDialog } from './connection-mode-dialog'
 
@@ -54,6 +58,8 @@ let saveConnectionConfig: ReturnType<typeof vi.fn>
 let applyConnectionConfig: ReturnType<typeof vi.fn>
 let testConnectionConfig: ReturnType<typeof vi.fn>
 let probeConnectionConfig: ReturnType<typeof vi.fn>
+let firstRunComplete: ReturnType<typeof vi.fn>
+let reloadSpy: ReturnType<typeof vi.fn>
 
 function installDesktop(initial: DesktopConnectionConfig) {
   getConnectionConfig = vi.fn().mockResolvedValue(initial)
@@ -61,6 +67,7 @@ function installDesktop(initial: DesktopConnectionConfig) {
   applyConnectionConfig = vi.fn(async (payload: DesktopConnectionConfigInput) => ({ ...initial, ...payload }))
   testConnectionConfig = vi.fn().mockResolvedValue({ baseUrl: TOKEN_PROBE.baseUrl, ok: true, version: '0.17.0' })
   probeConnectionConfig = vi.fn().mockResolvedValue(TOKEN_PROBE)
+  firstRunComplete = vi.fn().mockResolvedValue({ ok: true, required: false })
 
   ;(window as { hermesDesktop?: unknown }).hermesDesktop = {
     getConnectionConfig,
@@ -69,7 +76,11 @@ function installDesktop(initial: DesktopConnectionConfig) {
     testConnectionConfig,
     probeConnectionConfig,
     oauthLoginConnectionConfig: vi.fn(),
-    oauthLogoutConnectionConfig: vi.fn()
+    oauthLogoutConnectionConfig: vi.fn(),
+    firstRunChoice: {
+      get: vi.fn().mockResolvedValue({ required: true }),
+      complete: firstRunComplete
+    }
   }
 }
 
@@ -78,8 +89,15 @@ function renderDialog(node: ReactNode = <ConnectionModeDialog />) {
 }
 
 beforeEach(() => {
-  $connectionModeDialog.set({ open: false, prefill: null })
+  $connectionModeDialog.set({ open: false, prefill: null, firstRun: false })
   installDesktop(LOCAL_CONFIG)
+  // jsdom's window.location.reload is a no-op that logs "not implemented";
+  // spy on it so the first-run "set up local" path can assert the reload.
+  reloadSpy = vi.fn()
+  Object.defineProperty(window, 'location', {
+    configurable: true,
+    value: { ...window.location, reload: reloadSpy }
+  })
 })
 
 afterEach(() => {
@@ -156,5 +174,68 @@ describe('ConnectionModeDialog', () => {
     await waitFor(() =>
       expect(probeConnectionConfig).toHaveBeenCalledWith('https://vps.example.com/hermes'), { timeout: 2000 }
     )
+  })
+
+  describe('first-run mode', () => {
+    it('shows the first-run chooser copy and no dismiss affordance', async () => {
+      renderDialog()
+      openFirstRunConnectionChoice()
+
+      await waitFor(() => expect(screen.getByText('How would you like to use Hermes?')).toBeTruthy())
+      // Both choices are offered.
+      expect(screen.getByText('Local Runtime')).toBeTruthy()
+      expect(screen.getByText('Client Mode')).toBeTruthy()
+      // The Local action reads "Set up local Hermes", not "Use Local Runtime".
+      expect(screen.getByRole('button', { name: 'Set up local Hermes' })).toBeTruthy()
+      // No close (X) button in the blocking first-run gate.
+      expect(screen.queryByRole('button', { name: /close/i })).toBeNull()
+    })
+
+    it('"Set up local Hermes" records the local choice and reloads', async () => {
+      renderDialog()
+      openFirstRunConnectionChoice()
+
+      const setUp = await screen.findByRole('button', { name: 'Set up local Hermes' })
+      fireEvent.click(setUp)
+
+      await waitFor(() => expect(firstRunComplete).toHaveBeenCalledWith('local'))
+      await waitFor(() => expect(reloadSpy).toHaveBeenCalledTimes(1))
+      // Never touches the connection config on the local path.
+      expect(applyConnectionConfig).not.toHaveBeenCalled()
+    })
+
+    it('external choice records remote then applies the remote config', async () => {
+      renderDialog()
+      openFirstRunConnectionChoice()
+
+      await waitFor(() => expect(screen.getByText('Client Mode')).toBeTruthy())
+      fireEvent.click(screen.getByText('Client Mode'))
+
+      const url = await screen.findByPlaceholderText(/gateway.example.com/i)
+      fireEvent.change(url, { target: { value: 'https://gateway.example.com/hermes' } })
+
+      await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes'), {
+        timeout: 2000
+      })
+      const token = await screen.findByPlaceholderText('Paste session token')
+      fireEvent.change(token, { target: { value: 'secret-token' } })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+
+      await waitFor(() => expect(firstRunComplete).toHaveBeenCalledWith('remote'))
+      await waitFor(() => expect(applyConnectionConfig).toHaveBeenCalledTimes(1))
+    })
+
+    it('cannot be dismissed with Escape while in first-run mode', async () => {
+      renderDialog()
+      openFirstRunConnectionChoice()
+
+      await waitFor(() => expect(screen.getByText('How would you like to use Hermes?')).toBeTruthy())
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape', code: 'Escape' })
+
+      // Still open — the gate blocks Escape.
+      await waitFor(() => expect($connectionModeDialog.get().open).toBe(true))
+      expect($connectionModeDialog.get().firstRun).toBe(true)
+    })
   })
 })

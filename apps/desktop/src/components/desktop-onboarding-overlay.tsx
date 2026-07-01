@@ -14,6 +14,7 @@ import { Check, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, KeyRound, 
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { cn } from '@/lib/utils'
 import { $desktopBoot, type DesktopBootState } from '@/store/boot'
+import { $connectionModeDialog, isFirstRunChoiceActive } from '@/store/connection-mode'
 import {
   $desktopOnboarding,
   cancelOnboardingFlow,
@@ -186,6 +187,7 @@ export function DesktopOnboardingOverlay({ enabled, onCompleted, requestGateway 
   const { t } = useI18n()
   const onboarding = useStore($desktopOnboarding)
   const boot = useStore($desktopBoot)
+  const connectionModeDialog = useStore($connectionModeDialog)
   const ctxRef = useRef<OnboardingContext>({ requestGateway, onCompleted })
   ctxRef.current = { requestGateway, onCompleted }
 
@@ -254,6 +256,16 @@ export function DesktopOnboardingOverlay({ enabled, onCompleted, requestGateway 
       clearPendingProviderOAuth()
     }
   }, [ctx, onboarding.flow.status, onboarding.manual, onboarding.providers])
+
+  // The blocking first-run chooser (local runtime vs external Hermes) owns the
+  // screen before any backend exists. Otherwise this overlay's `Preparing`
+  // state renders its "Starting…/N%" splash at z-1300 — ABOVE the chooser (the
+  // dialog content sits at ~z-130) — leaving the app visually stuck on a boot
+  // splash the user can't dismiss even though the chooser is open underneath.
+  // Stand down until the choice is recorded (which reloads the window).
+  if (isFirstRunChoiceActive(connectionModeDialog)) {
+    return null
+  }
 
   // Mount from frame 1 so we replace the boot overlay seamlessly. The
   // configured field stays null until the runtime check resolves; only then

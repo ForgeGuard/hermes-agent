@@ -184,7 +184,14 @@ export const zh: Translations = {
     connectedTitle: '已连接',
     connectedMessage: '已连接到远程后端。',
     switchedLocalTitle: '已切换到本地运行时',
-    switchedLocalMessage: '此应用现在使用本地运行时。'
+    switchedLocalMessage: '此应用现在使用本地运行时。',
+    firstRunTitle: '您想如何使用 Hermes？',
+    firstRunDescription: '在本机搭建私有的 Hermes 运行时，或连接到已在运行的 Hermes 后端。',
+    firstRunLocalDesc: '在本机安装并运行 Hermes。可离线使用；适合大多数用户。',
+    firstRunClientDesc: '跳过本地安装，连接到已在其他位置运行的 Hermes 后端。',
+    firstRunSetUpLocal: '搭建本地 Hermes',
+    firstRunLocalToastTitle: '正在搭建本地 Hermes',
+    firstRunLocalToastMessage: 'Hermes 桌面版将安装并启动本地运行时。'
   },
 
   titlebar: {

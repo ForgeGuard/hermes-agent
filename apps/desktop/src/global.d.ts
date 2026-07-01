@@ -62,6 +62,12 @@ declare global {
         // clear the preference.
         set: (name: string | null) => Promise<DesktopActiveProfile>
       }
+      // First-run local-vs-remote choice. `get` reports whether the chooser
+      // should block boot; `complete` records the pick so the app stops asking.
+      firstRunChoice?: {
+        get: () => Promise<DesktopFirstRunChoiceStatus>
+        complete: (choice: DesktopFirstRunChoice) => Promise<DesktopFirstRunChoiceResult>
+      }
       api: <T>(request: HermesApiRequest) => Promise<T>
       notify: (payload: HermesNotification) => Promise<boolean>
       requestMicrophoneAccess: () => Promise<boolean>
@@ -395,6 +401,17 @@ export interface DesktopConnectionConfig {
   remoteTokenPreview: string | null
   remoteTokenSet: boolean
   remoteUrl: string
+}
+
+export type DesktopFirstRunChoice = 'local' | 'remote'
+
+export interface DesktopFirstRunChoiceStatus {
+  required: boolean
+}
+
+export interface DesktopFirstRunChoiceResult {
+  ok: boolean
+  required: boolean
 }
 
 export interface DesktopConnectionConfigInput {

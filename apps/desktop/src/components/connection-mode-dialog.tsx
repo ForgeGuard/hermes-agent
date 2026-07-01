@@ -57,7 +57,7 @@ function ModeCard({
   )
 }
 
-function DialogBody({ prefill }: { prefill: ConnectionModePrefill | null }) {
+function DialogBody({ firstRun, prefill }: { firstRun: boolean; prefill: ConnectionModePrefill | null }) {
   const { t } = useI18n()
   const c = t.connectionMode
   const g = t.settings.gateway
@@ -119,6 +119,16 @@ function DialogBody({ prefill }: { prefill: ConnectionModePrefill | null }) {
   }, [loading])
 
   const applyLocalMode = async () => {
+    // First run: there's no backend to switch — record the choice, then reload
+    // so main (which deferred the eager start) boots the local runtime for real.
+    if (firstRun) {
+      await window.hermesDesktop?.firstRunChoice?.complete?.('local').catch(() => undefined)
+      notify({ kind: 'success', title: c.firstRunLocalToastTitle, message: c.firstRunLocalToastMessage })
+      window.location.reload()
+
+      return
+    }
+
     if (await switchToLocal()) {
       notify({ kind: 'success', title: c.switchedLocalTitle, message: c.switchedLocalMessage })
       closeConnectionModeDialog()
@@ -126,6 +136,13 @@ function DialogBody({ prefill }: { prefill: ConnectionModePrefill | null }) {
   }
 
   const connect = async () => {
+    // First run: remember the remote pick BEFORE apply (apply reloads the
+    // window). Only after canUseRemote passes, so a failed/incomplete remote
+    // never records 'remote' with no saved config behind it.
+    if (firstRun && canUseRemote) {
+      await window.hermesDesktop?.firstRunChoice?.complete?.('remote').catch(() => undefined)
+    }
+
     if (await save(true)) {
       notify({ kind: 'success', title: c.connectedTitle, message: c.connectedMessage })
       closeConnectionModeDialog()
@@ -142,8 +159,8 @@ function DialogBody({ prefill }: { prefill: ConnectionModePrefill | null }) {
   return (
     <>
       <DialogHeader>
-        <DialogTitle icon={Globe}>{c.title}</DialogTitle>
-        <DialogDescription>{c.description}</DialogDescription>
+        <DialogTitle icon={Globe}>{firstRun ? c.firstRunTitle : c.title}</DialogTitle>
+        <DialogDescription>{firstRun ? c.firstRunDescription : c.description}</DialogDescription>
       </DialogHeader>
 
       {loading ? (
@@ -161,7 +178,7 @@ function DialogBody({ prefill }: { prefill: ConnectionModePrefill | null }) {
                 <div className="mt-1 leading-5">{g.envOverrideDesc}</div>
               </div>
             </div>
-          ) : (
+          ) : firstRun ? null : (
             <p className="text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
               {remote && trimmedUrl ? c.currentRemote(trimmedUrl) : c.currentLocal}
             </p>
@@ -170,7 +187,7 @@ function DialogBody({ prefill }: { prefill: ConnectionModePrefill | null }) {
           <div className="grid gap-3 sm:grid-cols-2">
             <ModeCard
               active={state.mode === 'local'}
-              description={c.localDesc}
+              description={firstRun ? c.firstRunLocalDesc : c.localDesc}
               disabled={state.envOverride}
               icon={Monitor}
               onSelect={() => setMode('local')}
@@ -178,7 +195,7 @@ function DialogBody({ prefill }: { prefill: ConnectionModePrefill | null }) {
             />
             <ModeCard
               active={remote}
-              description={c.clientDesc}
+              description={firstRun ? c.firstRunClientDesc : c.clientDesc}
               disabled={state.envOverride}
               icon={Globe}
               onSelect={() => setMode('remote')}
@@ -277,9 +294,11 @@ function DialogBody({ prefill }: { prefill: ConnectionModePrefill | null }) {
           ) : null}
 
           <div className="mt-1 flex flex-wrap items-center justify-end gap-3">
-            <Button className="mr-auto" onClick={openFullSettings} size="sm" variant="text">
-              {c.advanced}
-            </Button>
+            {firstRun ? null : (
+              <Button className="mr-auto" onClick={openFullSettings} size="sm" variant="text">
+                {c.advanced}
+              </Button>
+            )}
             {remote ? (
               <>
                 <Button
@@ -303,7 +322,7 @@ function DialogBody({ prefill }: { prefill: ConnectionModePrefill | null }) {
             ) : (
               <Button disabled={state.envOverride || saving} onClick={() => void applyLocalMode()} size="sm">
                 {saving ? <Loader2 className="animate-spin" /> : null}
-                {c.useLocal}
+                {firstRun ? c.firstRunSetUpLocal : c.useLocal}
               </Button>
             )}
           </div>
@@ -319,15 +338,31 @@ function DialogBody({ prefill }: { prefill: ConnectionModePrefill | null }) {
 // and the settings page never diverge. Opened from the shell gateway menu, the
 // boot failure overlay, or a `hermes://connect` deep link.
 export function ConnectionModeDialog() {
-  const { open, prefill } = useStore($connectionModeDialog)
+  const { firstRun, open, prefill } = useStore($connectionModeDialog)
 
   if (!window.hermesDesktop?.getConnectionConfig) {
     return null
   }
 
+  // First-run mode is a blocking gate: no backend is running yet and the user
+  // MUST pick local vs remote, so dismissal (X, Escape, click-outside) is
+  // disabled. Otherwise it behaves like any other dialog.
+  const blockClose = (event: Event) => event.preventDefault()
+
   return (
-    <Dialog onOpenChange={next => (next ? undefined : closeConnectionModeDialog())} open={open}>
-      <DialogContent className="max-w-xl">{open ? <DialogBody prefill={prefill} /> : null}</DialogContent>
+    <Dialog
+      onOpenChange={next => (next || firstRun ? undefined : closeConnectionModeDialog())}
+      open={open}
+    >
+      <DialogContent
+        className="max-w-xl"
+        onEscapeKeyDown={firstRun ? blockClose : undefined}
+        onInteractOutside={firstRun ? blockClose : undefined}
+        onPointerDownOutside={firstRun ? blockClose : undefined}
+        showCloseButton={!firstRun}
+      >
+        {open ? <DialogBody firstRun={firstRun} prefill={prefill} /> : null}
+      </DialogContent>
     </Dialog>
   )
 }

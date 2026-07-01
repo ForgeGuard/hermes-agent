@@ -2,6 +2,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $desktopBoot } from '@/store/boot'
+import { $connectionModeDialog } from '@/store/connection-mode'
 import { $gatewayState } from '@/store/session'
 
 import { useGatewayBoot } from './use-gateway-boot'
@@ -125,6 +126,7 @@ beforeEach(() => {
   ;(globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket
   ;(window as { hermesDesktop?: unknown }).hermesDesktop = fakeDesktop()
   $gatewayState.set('idle')
+  $connectionModeDialog.set({ open: false, prefill: null, firstRun: false })
   $desktopBoot.set({
     error: null,
     fakeMode: false,
@@ -243,6 +245,51 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     // The hook surfaced the recoverable error → BootFailureOverlay (Use local
     // gateway / Sign in / Retry) becomes reachable instead of CONNECTING.
     expect($desktopBoot.get().error).toBeTruthy()
+  })
+
+  it('first-run required: defers connecting and opens the blocking chooser instead', async () => {
+    const desktop = fakeDesktop() as ReturnType<typeof fakeDesktop> & {
+      firstRunChoice?: { get: ReturnType<typeof vi.fn>; complete: ReturnType<typeof vi.fn> }
+    }
+
+    desktop.firstRunChoice = {
+      get: vi.fn(async () => ({ required: true })),
+      complete: vi.fn(async () => ({ ok: true, required: false }))
+    }
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
+
+    render(<Harness />)
+    await flushAsync()
+
+    // No backend is dialed while the user still has to choose.
+    expect(desktop.getConnection).not.toHaveBeenCalled()
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    // The blocking first-run chooser is up, and the boot splash stood down.
+    expect($connectionModeDialog.get().open).toBe(true)
+    expect($connectionModeDialog.get().firstRun).toBe(true)
+    expect($desktopBoot.get().visible).toBe(false)
+    expect($desktopBoot.get().running).toBe(false)
+    // The gateway machinery never subscribed to boot progress either — the whole
+    // init was deferred behind the gate, not just the getConnection call.
+    expect(desktop.onBootProgress).not.toHaveBeenCalled()
+  })
+
+  it('first-run check is best-effort: a rejecting get() still boots normally', async () => {
+    const desktop = fakeDesktop() as ReturnType<typeof fakeDesktop> & {
+      firstRunChoice?: { get: ReturnType<typeof vi.fn> }
+    }
+
+    // An older/erroring main (IPC throws) must not wedge the app on the splash:
+    // we fall through to the normal connect path exactly as before the gate.
+    desktop.firstRunChoice = { get: vi.fn(async () => Promise.reject(new Error('no ipc'))) }
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
+
+    render(<Harness />)
+    await flushAsync()
+
+    expect(desktop.getConnection).toHaveBeenCalled()
+    expect($connectionModeDialog.get().open).toBe(false)
+    expect($gatewayState.get()).toBe('open')
   })
 
   it('FIX: a successful reconnect clears the recoverable error', async () => {

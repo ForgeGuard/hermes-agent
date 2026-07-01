@@ -149,4 +149,30 @@ describe('connecting overlay vs recovery surface', () => {
     expect(screen.getByText(/use local gateway/i)).toBeTruthy()
     expect(isConnectingShown()).toBe(false)
   })
+
+  it('stands down while the boot is suspended for the first-run choice', () => {
+    // suspendDesktopBootForChoice() parks the boot: phase 'renderer.first-run',
+    // progress 0, running/visible false — the blocking chooser owns the screen.
+    // The connecting splash must NOT render on top of it. The old activation
+    // (`… || boot.progress < 100`) kept it alive on that 0 alone.
+    setGatewayState('idle')
+    $desktopBoot.set({
+      ...$desktopBoot.get(),
+      error: null,
+      phase: 'renderer.first-run',
+      progress: 0,
+      running: false,
+      visible: false
+    })
+
+    render(
+      <>
+        <GatewayConnectingOverlay />
+        <BootFailureOverlay />
+      </>
+    )
+
+    expect(isConnectingShown()).toBe(false)
+    expect(isRecoveryShown()).toBe(false)
+  })
 })
