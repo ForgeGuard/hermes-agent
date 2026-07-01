@@ -6,8 +6,9 @@ import { ErrorIcon } from '@/components/ui/error-state'
 import { LogView } from '@/components/ui/log-view'
 import type { DesktopConnectionConfig } from '@/global'
 import { useI18n } from '@/i18n'
-import { FileText, Loader2, LogIn, RefreshCw, Wrench } from '@/lib/icons'
+import { FileText, Globe, Loader2, LogIn, RefreshCw, Wrench } from '@/lib/icons'
 import { $desktopBoot } from '@/store/boot'
+import { openConnectionModeDialog } from '@/store/connection-mode'
 import { notify, notifyError } from '@/store/notifications'
 import { $desktopOnboarding } from '@/store/onboarding'
 
@@ -215,6 +216,15 @@ export function BootFailureOverlay() {
                 {busy === 'local' ? <Loader2 className="animate-spin" /> : null}
                 {copy.useLocalGateway}
               </Button>
+              {/* Local runtime won't boot? Point this app at an already-running
+                  remote backend (e.g. an ADM deployment) instead of the failed
+                  local install. The reauth case already offers a sign-in path. */}
+              {!remoteReauth ? (
+                <Button disabled={Boolean(busy)} onClick={() => openConnectionModeDialog()} variant="secondary">
+                  <Globe />
+                  {t.connectionMode.switchToClient}
+                </Button>
+              ) : null}
               <Button onClick={openLogs} variant="ghost">
                 <FileText />
                 {copy.openLogs}

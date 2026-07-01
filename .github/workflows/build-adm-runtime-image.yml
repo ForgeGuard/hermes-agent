@@ -1,0 +1,131 @@
+name: Build ADM Runtime Image (GHCR)
+
+# Fork-oriented runtime image publisher for downstream Deployment Manager (ADM)
+# deployments. Upstream (NousResearch/hermes-agent) publishes the multi-arch
+# image to Docker Hub through docker.yml with an upstream-only repo guard; that
+# workflow never runs on a fork. This workflow reuses the SAME Dockerfile and
+# the SAME docker integration tests, but publishes to the fork's GitHub
+# Container Registry (ghcr.io/<owner>/hermes-agent) so the ADM control plane
+# has an image to pull without touching the upstream Docker Hub namespace.
+#
+# Scope: linux/amd64 only for the initial spike. arm64 + a release/date tag
+# matrix can be layered on once the amd64 path is proven, mirroring docker.yml's
+# per-arch digest + manifest-merge structure.
+
+on:
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push the built image to GHCR (otherwise build + test only)"
+        type: boolean
+        default: true
+  push:
+    branches:
+      - main
+    paths:
+      - "Dockerfile"
+      - "docker/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/build-adm-runtime-image.yml"
+
+permissions:
+  contents: read
+  # Required so build-push-action can push the image + read/write the
+  # registry-backed build cache on ghcr.io.
+  packages: write
+
+# Never cancel a push-to-main publish; collapse rapid manual re-dispatches.
+concurrency:
+  group: adm-runtime-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  build-amd64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Lowercase the owner: GHCR image paths must be lowercase, but
+      # github.repository_owner preserves the account's original casing.
+      - name: Compute image name
+        id: image
+        run: |
+          owner="$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "name=ghcr.io/${owner}/hermes-agent" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # Log in up-front so the registry-backed build cache can be read on every
+      # run and written on publishing runs. Uses the workflow GITHUB_TOKEN,
+      # which is valid for the whole job (see docker.yml's arm64 rationale for
+      # why the registry cache credential outlives the gha SAS token).
+      - name: Log in to ghcr.io
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build once, load into the local daemon so the docker integration tests
+      # below run against the exact image we publish. Same build-args + cache
+      # discipline as docker.yml.
+      - name: Build image (amd64)
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.name }}:test
+          build-args: |
+            HERMES_GIT_SHA=${{ github.sha }}
+          cache-from: type=registry,ref=${{ steps.image.outputs.name }}:buildcache-adm-amd64
+          cache-to: type=registry,ref=${{ steps.image.outputs.name }}:buildcache-adm-amd64,mode=max
+
+      - name: Install uv (for docker tests)
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+
+      - name: Set up Python 3.11 (for docker tests)
+        run: uv python install 3.11
+
+      - name: Install Python dependencies (for docker tests)
+        run: |
+          uv sync --locked --python 3.11 --extra dev
+
+      # Reuse the daemon-loaded image so the tests validate the published
+      # bytes. HERMES_TEST_IMAGE short-circuits the fixture rebuild.
+      - name: Run docker integration tests
+        env:
+          HERMES_TEST_IMAGE: ${{ steps.image.outputs.name }}:test
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+        run: |
+          scripts/run_tests.sh tests/docker/ --file-timeout 600
+
+      # Publish only on push-to-main or an explicit workflow_dispatch with
+      # push=true. Tags: adm-<sha> (immutable, traceable) + adm-latest
+      # (rolling). Release/date tags are deferred until the spike is stable.
+      - name: Push image to GHCR
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push)
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.image.outputs.name }}:adm-${{ github.sha }}
+            ${{ steps.image.outputs.name }}:adm-latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            HERMES_GIT_SHA=${{ github.sha }}
+          cache-from: type=registry,ref=${{ steps.image.outputs.name }}:buildcache-adm-amd64
+          cache-to: type=registry,ref=${{ steps.image.outputs.name }}:buildcache-adm-amd64,mode=max

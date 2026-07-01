@@ -211,6 +211,29 @@ export interface Translations {
     dismiss: string
   }
 
+  connectionMode: {
+    title: string
+    description: string
+    localTitle: string
+    localDesc: string
+    clientTitle: string
+    clientDesc: string
+    currentLocal: string
+    currentRemote: (url: string) => string
+    urlTitle: string
+    urlDesc: string
+    connect: string
+    useLocal: string
+    switchToLocal: string
+    switchToClient: string
+    reconnect: string
+    advanced: string
+    connectedTitle: string
+    connectedMessage: string
+    switchedLocalTitle: string
+    switchedLocalMessage: string
+  }
+
   titlebar: {
     hideSidebar: string
     showSidebar: string

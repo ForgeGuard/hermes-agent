@@ -169,6 +169,29 @@ export const en: Translations = {
     dismiss: 'Dismiss'
   },
 
+  connectionMode: {
+    title: 'Connection',
+    description: 'Choose how this app connects to a Hermes backend.',
+    localTitle: 'Local Runtime',
+    localDesc: 'Run a private Hermes backend on this machine. Works offline; the default.',
+    clientTitle: 'Client Mode',
+    clientDesc: 'Connect to an already-running Hermes backend on another machine or server.',
+    currentLocal: 'Using the local runtime on this machine.',
+    currentRemote: url => `Client mode — connected to ${url}.`,
+    urlTitle: 'Backend URL',
+    urlDesc: 'Base URL for the remote dashboard backend. Path prefixes are supported, for example /hermes.',
+    connect: 'Connect',
+    useLocal: 'Use Local Runtime',
+    switchToLocal: 'Switch to Local Runtime',
+    switchToClient: 'Switch to Client Mode',
+    reconnect: 'Reconnect',
+    advanced: 'Open full gateway settings',
+    connectedTitle: 'Client mode enabled',
+    connectedMessage: 'Hermes Desktop will reconnect to the remote backend.',
+    switchedLocalTitle: 'Local runtime enabled',
+    switchedLocalMessage: 'Hermes Desktop will restart its local backend.'
+  },
+
   titlebar: {
     hideSidebar: 'Hide sidebar',
     showSidebar: 'Show sidebar',

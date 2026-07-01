@@ -4,6 +4,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { BootFailureOverlay } from '@/components/boot-failure-overlay'
+import { ConnectionModeDialog } from '@/components/connection-mode-dialog'
 import { DesktopInstallOverlay } from '@/components/desktop-install-overlay'
 import { DesktopOnboardingOverlay } from '@/components/desktop-onboarding-overlay'
 import { GatewayConnectingOverlay } from '@/components/gateway-connecting-overlay'
@@ -25,6 +26,7 @@ import {
   normalizeSessionSource
 } from '../lib/session-source'
 import { latestSessionTodos } from '../lib/todos'
+import { openConnectionModeDialog } from '../store/connection-mode'
 import { setCronFocusJobId, setCronJobs } from '../store/cron'
 import {
   $fileBrowserOpen,
@@ -366,7 +368,32 @@ export function DesktopController() {
   // that arrived during boot is flushed exactly once.
   useEffect(() => {
     const unsubscribe = window.hermesDesktop?.onDeepLink?.(payload => {
-      if (!payload || payload.kind !== 'blueprint' || !payload.name) {
+      if (!payload) {
+        return
+      }
+
+      // hermes://connect?url=…&token=…&auth=oauth|token — a Deployment Manager
+      // (or docs "Connect" button) hands off a remote backend. Open the guided
+      // Client Mode dialog seeded with the endpoint instead of dropping the raw
+      // URL into the composer.
+      if (payload.kind === 'connect') {
+        const params = payload.params || {}
+        const url = (params.url || params.endpoint || payload.name || '').trim()
+
+        if (!url) {
+          return
+        }
+
+        openConnectionModeDialog({
+          url,
+          token: params.token?.trim() || undefined,
+          authMode: params.auth === 'oauth' ? 'oauth' : params.auth === 'token' ? 'token' : undefined
+        })
+
+        return
+      }
+
+      if (payload.kind !== 'blueprint' || !payload.name) {
         return
       }
 
@@ -1142,6 +1169,7 @@ export function DesktopController() {
       <UpdatesOverlay />
       <GatewayConnectingOverlay />
       <BootFailureOverlay />
+      <ConnectionModeDialog />
       <CommandPalette />
       <PetGenerateOverlay />
       <SessionSwitcher />

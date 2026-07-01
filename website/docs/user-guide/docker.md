@@ -366,6 +366,72 @@ services:
 
 Start with `docker compose up -d` and view logs with `docker compose logs -f`. The supervised gateway's stdout is also tee'd to `${HERMES_HOME}/logs/gateways/<profile>/current` on the volume — see [Where the logs go](#where-the-logs-go) for the full routing map.
 
+## Deployment Manager (ADM) runtime image
+
+A fork/downstream deployment that provisions Hermes through a control plane
+(the "Deployment Manager", ADM) reuses the **same** image described above — the
+only differences are *where it is published* and *how it is wired for
+remote clients*. Nothing about `/opt/hermes` (immutable install tree) or
+`/opt/data` (persistent state) changes.
+
+- **Registry.** Upstream publishes the multi-arch image to Docker Hub
+  (`nousresearch/hermes-agent`). A fork publishes to its own GitHub Container
+  Registry via the `Build ADM Runtime Image (GHCR)` workflow
+  (`.github/workflows/build-adm-runtime-image.yml`), tagged
+  `ghcr.io/<owner>/hermes-agent:adm-<sha>` (immutable) and `:adm-latest`
+  (rolling). Substitute that reference for `nousresearch/hermes-agent` in any
+  command on this page.
+- **Persistent data stays at `/opt/data`.** Mount each deployment's profile
+  data at `/opt/data` (`-v /srv/hermes/<deployment>:/opt/data`). Do **not**
+  rebuild the image to relocate state to `/home/hermes`; `/opt/data` is the
+  documented, s6-aware layout and the boot reconciler, per-profile logs, and
+  lazy-package dir all key off it.
+- **Prefer `HERMES_UID` / `HERMES_GID` over `docker run --user`.** The image
+  boots as root so the stage2 hook can `chown` the volume and then drops each
+  supervised service to the `hermes` user. Overriding the whole container with
+  `--user` skips that remap and leaves the volume unwritable. Set
+  `HERMES_UID`/`HERMES_GID` (or their `PUID`/`PGID` aliases) to the host owner
+  of the bind mount instead — see [Permission denied errors](#permission-denied-errors).
+
+### Dashboard is the Desktop / remote-client backend (port 9119)
+
+The Hermes Desktop app's **Client Mode** and the web dashboard both connect to
+a `hermes dashboard` backend on **port 9119** — *not* the OpenAI API server on
+`8642`. For an ADM deployment that Desktop clients connect to remotely:
+
+- Enable the dashboard with `HERMES_DASHBOARD=1` and publish `-p 9119:9119`.
+- Treat `8642` as **optional** API-server traffic (OpenAI-compatible clients).
+  It is not required for Desktop Client Mode; only publish it if you also serve
+  `/v1/...` clients.
+- One dashboard backend serves **every** co-located profile — the client sends
+  the target profile with each request. You do not need a port per profile for
+  Desktop clients.
+- The dashboard auth gate is **mandatory** on the non-loopback bind an ADM box
+  uses. Configure one provider before exposing the port:
+  username/password (`HERMES_DASHBOARD_BASIC_AUTH_USERNAME` +
+  `_PASSWORD` + `_SECRET`), OAuth (Nous Portal), or self-hosted OIDC. See
+  [Running the dashboard](#running-the-dashboard) for all three. With no
+  provider configured the dashboard fails closed at startup.
+
+```sh
+docker run -d \
+  --name hermes \
+  --restart unless-stopped \
+  -v /srv/hermes/default:/opt/data \
+  -p 9119:9119 \
+  -e HERMES_DASHBOARD=1 \
+  -e HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin \
+  -e HERMES_DASHBOARD_BASIC_AUTH_PASSWORD="$(openssl rand -hex 24)" \
+  -e HERMES_DASHBOARD_BASIC_AUTH_SECRET="$(openssl rand -hex 32)" \
+  -e HERMES_UID="$(id -u)" -e HERMES_GID="$(id -g)" \
+  ghcr.io/<owner>/hermes-agent:adm-latest gateway run
+```
+
+Point the Desktop app's **Client Mode** at `https://<host>:9119` and sign in
+with the provider you configured. See
+[Reaching more than one profile from outside the container](#reaching-more-than-one-profile-from-outside-the-container)
+for how the Desktop profile switcher maps onto a single `:9119` connection.
+
 ## Optional: Linux desktop audio bridge
 
 Voice mode in Docker needs two separate things to work: Hermes must be allowed to probe audio devices inside the container, and the container must be able to reach your host audio server. The setup below covers the host audio plumbing for Linux desktops that expose a PulseAudio-compatible socket, including many PipeWire setups.

@@ -164,6 +164,29 @@ export const zh: Translations = {
     dismiss: '关闭'
   },
 
+  connectionMode: {
+    title: '连接',
+    description: '选择此应用连接 Hermes 后端的方式。',
+    localTitle: '本地运行时',
+    localDesc: '在本机管理并运行 Hermes。无需额外配置。',
+    clientTitle: '客户端模式',
+    clientDesc: '连接到已在运行的远程 Hermes 后端。',
+    currentLocal: '当前：本地运行时',
+    currentRemote: url => `当前：${url}`,
+    urlTitle: '后端地址',
+    urlDesc: '输入 Hermes 仪表盘后端的地址。',
+    connect: '连接',
+    useLocal: '使用本地运行时',
+    switchToLocal: '切换到本地运行时',
+    switchToClient: '切换到客户端模式',
+    reconnect: '重新连接',
+    advanced: '高级网关设置',
+    connectedTitle: '已连接',
+    connectedMessage: '已连接到远程后端。',
+    switchedLocalTitle: '已切换到本地运行时',
+    switchedLocalMessage: '此应用现在使用本地运行时。'
+  },
+
   titlebar: {
     hideSidebar: '隐藏侧边栏',
     showSidebar: '显示侧边栏',

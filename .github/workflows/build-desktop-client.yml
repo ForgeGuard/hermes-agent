@@ -1,0 +1,99 @@
+name: Build Desktop Client (Linux)
+
+# Fork-oriented desktop artifact builder. Produces unsigned Linux installers for
+# the Electron desktop app (apps/desktop) so a downstream Deployment Manager (or
+# a fork maintainer) has a downloadable client that can point at an ADM runtime
+# image via Client Mode.
+#
+# Linux-first on purpose: ubuntu-latest builds AppImage/deb/rpm without signing
+# credentials. macOS + Windows matrix jobs can be layered on once the Linux path
+# is proven — macOS release builds additionally need notarization/signing certs
+# that a fork won't have by default, so they stay a follow-up.
+#
+# The desktop workspace resolves its dependencies from the ROOT install (npm
+# workspaces + staged native deps), so this always runs `npm ci` at the repo
+# root, never a package-local install.
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: "Upload the built installers as workflow artifacts"
+        type: boolean
+        default: true
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/desktop/**"
+      - "apps/shared/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/build-desktop-client.yml"
+
+permissions:
+  contents: read
+
+# Collapse rapid manual re-dispatches; never cancel a push-to-main build.
+concurrency:
+  group: desktop-client-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  build-linux:
+    name: Build Linux desktop installers
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # electron-builder's rpm target shells out to rpmbuild, which isn't on the
+      # ubuntu-latest image by default. AppImage + deb work out of the box.
+      - name: Install rpm tooling
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      # Root install (with scripts): the desktop build stages native deps
+      # (node-pty) and depends on workspace hoisting. retry covers registry blips.
+      - name: Install dependencies (root)
+        uses: ./.github/actions/retry
+        with:
+          command: npm ci
+
+      # Gate the artifact on the same fast checks a contributor runs locally,
+      # so a broken main-process/renderer change fails before the slow package.
+      - name: Desktop main-process tests
+        run: npm run --prefix apps/desktop test:desktop:platforms
+
+      - name: Desktop renderer tests
+        run: npm run --prefix apps/desktop test:ui
+
+      - name: Typecheck desktop
+        run: npm run --prefix apps/desktop typecheck
+
+      - name: Build renderer + main
+        run: npm run --prefix apps/desktop build
+
+      # Package the unsigned Linux installers. dist:linux runs the build again
+      # internally, but keeping the explicit build step above means a renderer
+      # break surfaces with a clearer log before the heavyweight packager runs.
+      - name: Package Linux installers
+        run: npm run --prefix apps/desktop dist:linux
+
+      - name: Upload Linux installers
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.upload)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-desktop-linux
+          path: |
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.rpm
+          if-no-files-found: error
+          retention-days: 14
