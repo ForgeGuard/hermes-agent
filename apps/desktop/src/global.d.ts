@@ -52,7 +52,10 @@ declare global {
       saveConnectionConfig: (payload: DesktopConnectionConfigInput) => Promise<DesktopConnectionConfig>
       applyConnectionConfig: (payload: DesktopConnectionConfigInput) => Promise<DesktopConnectionConfig>
       testConnectionConfig: (payload: DesktopConnectionConfigInput) => Promise<DesktopConnectionTestResult>
-      probeConnectionConfig: (remoteUrl: string) => Promise<DesktopConnectionProbeResult>
+      probeConnectionConfig: (
+        remoteUrl: string,
+        allowInvalidCertificate?: boolean
+      ) => Promise<DesktopConnectionProbeResult>
       oauthLoginConnectionConfig: (remoteUrl: string) => Promise<DesktopOauthLoginResult>
       oauthLogoutConnectionConfig: (remoteUrl?: string) => Promise<DesktopOauthLogoutResult>
       profile: {
@@ -396,6 +399,9 @@ export interface DesktopConnectionConfig {
   // The profile this config describes, or null for the global/default
   // connection. Per-profile entries let a profile point at its own backend.
   profile: null | string
+  // Opt-in: skip TLS certificate verification for this remote gateway. For a
+  // self-signed / untrusted certificate on a server the user controls.
+  remoteAllowInvalidCertificate: boolean
   remoteAuthMode: 'oauth' | 'token'
   remoteOauthConnected: boolean
   remoteTokenPreview: string | null
@@ -419,6 +425,8 @@ export interface DesktopConnectionConfigInput {
   // When set, the save/apply/test targets this profile's per-profile remote
   // override instead of the global connection.
   profile?: null | string
+  // Opt-in TLS bypass for a self-signed / untrusted gateway certificate.
+  remoteAllowInvalidCertificate?: boolean
   remoteAuthMode?: 'oauth' | 'token'
   remoteToken?: string
   remoteUrl?: string

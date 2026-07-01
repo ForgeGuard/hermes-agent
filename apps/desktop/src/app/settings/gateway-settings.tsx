@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { useI18n } from '@/i18n'
 import { AlertCircle, Check, FileText, Globe, Loader2, LogIn, Monitor } from '@/lib/icons'
 import { cn } from '@/lib/utils'
@@ -97,6 +98,7 @@ export function GatewaySettings() {
     remoteToken,
     save,
     saving,
+    setAllowInvalidCertificate,
     setMode,
     setRemoteToken,
     setRemoteUrl,
@@ -266,6 +268,21 @@ export function GatewaySettings() {
             }
             description={g.tokenDesc}
             title={g.tokenTitle}
+          />
+        ) : null}
+
+        {/* TLS bypass for a self-signed / untrusted gateway certificate. */}
+        {state.mode === 'remote' ? (
+          <ListRow
+            action={
+              <Switch
+                checked={state.remoteAllowInvalidCertificate}
+                disabled={state.envOverride}
+                onCheckedChange={setAllowInvalidCertificate}
+              />
+            }
+            description={g.insecureCertDesc}
+            title={g.insecureCertTitle}
           />
         ) : null}
       </div>

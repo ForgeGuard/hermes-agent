@@ -3234,7 +3234,11 @@ function fetchJson(url, token, options = {}) {
           'Content-Type': 'application/json',
           'X-Hermes-Session-Token': token,
           ...(body ? { 'Content-Length': String(body.length) } : {})
-        }
+        },
+        // Opt-in TLS bypass for a self-signed / untrusted gateway certificate.
+        // Only ever set false when the caller resolved the toggle for THIS
+        // remote; ignored by http:// requests.
+        ...(options.rejectUnauthorized === false ? { rejectUnauthorized: false } : {})
       },
       res => {
         const chunks = []
@@ -3313,7 +3317,10 @@ function fetchPublicJson(url, options = {}) {
         headers: {
           'Content-Type': 'application/json',
           ...(body ? { 'Content-Length': String(body.length) } : {})
-        }
+        },
+        // Opt-in TLS bypass for a self-signed / untrusted gateway certificate;
+        // ignored by http:// requests.
+        ...(options.rejectUnauthorized === false ? { rejectUnauthorized: false } : {})
       },
       res => {
         const chunks = []
@@ -3849,13 +3856,16 @@ function closePreviewWatchers() {
   }
 }
 
-async function waitForHermes(baseUrl, token) {
+async function waitForHermes(baseUrl, token, options = {}) {
   const deadline = Date.now() + 45_000
   let lastError = null
 
   while (Date.now() < deadline) {
     try {
-      await fetchJson(`${baseUrl}/api/status`, token)
+      // `options` carries the per-remote TLS-bypass opt-in (rejectUnauthorized:
+      // false) so a self-signed remote passes the readiness probe. Local
+      // (loopback http) callers pass nothing and are unaffected.
+      await fetchJson(`${baseUrl}/api/status`, token, options)
       return
     } catch (error) {
       lastError = error
@@ -4277,6 +4287,68 @@ function isAudioCapturePermission(permission, details) {
   return mediaTypes.includes('audio') && !mediaTypes.includes('video')
 }
 
+// Hosts the user has explicitly opted into an untrusted certificate for. Reads
+// the live connection config (global remote + every per-profile remote) so the
+// bypass is scoped to exactly the gateway host(s) that carry the opt-in — never
+// applied app-wide. The env-override remote intentionally has no bypass (add
+// the URL in Settings if a self-signed env target needs one).
+function hostAllowsInvalidCertificate(hostname) {
+  if (!hostname) {
+    return false
+  }
+
+  const config = readDesktopConnectionConfig()
+  const urls = []
+
+  if (config.remote?.url && config.remote.allowInvalidCertificate === true) {
+    urls.push(config.remote.url)
+  }
+  for (const entry of Object.values(config.profiles || {})) {
+    if (entry?.mode === 'remote' && entry.url && entry.allowInvalidCertificate === true) {
+      urls.push(entry.url)
+    }
+  }
+
+  for (const url of urls) {
+    try {
+      if (new URL(url).hostname === hostname) {
+        return true
+      }
+    } catch {
+      // Malformed stored URL — ignore; it can't match a real request host.
+    }
+  }
+
+  return false
+}
+
+// Wire the certificate-bypass into every Chromium/Electron transport the app
+// uses to reach a remote gateway: the renderer's live WebSocket (defaultSession)
+// and the OAuth REST/login flows (the OAuth partition + its login BrowserWindow).
+// Node's own https/WebSocket legs are handled separately via `rejectUnauthorized`.
+//
+// The verify proc trusts a cert only for a host the user opted into; every other
+// host defers to Chromium's own verification (callback(-3)), so normal TLS
+// enforcement is untouched everywhere else. Must run after `app` is ready.
+function installCertificateBypass() {
+  const verify = (request, callback) => {
+    // 0 = trust; -3 = fall back to Chromium's own verification result.
+    callback(hostAllowsInvalidCertificate(request.hostname) ? 0 : -3)
+  }
+
+  try {
+    session.defaultSession.setCertificateVerifyProc(verify)
+  } catch (error) {
+    rememberLog(`[gateway] could not install default-session certificate verifier: ${error?.message || error}`)
+  }
+
+  try {
+    getOauthSession()?.setCertificateVerifyProc(verify)
+  } catch (error) {
+    rememberLog(`[gateway] could not install oauth-session certificate verifier: ${error?.message || error}`)
+  }
+}
+
 function installMediaPermissions() {
   // Async request handler: the prompt-style path (most platforms).
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
@@ -4654,6 +4726,8 @@ function sanitizeConnectionProfiles(raw) {
       cleaned.url = url
     }
     cleaned.authMode = normAuthMode(entry.authMode)
+    // Opt-in TLS bypass for a self-signed / untrusted gateway certificate.
+    cleaned.allowInvalidCertificate = entry.allowInvalidCertificate === true
     if (entry.token && typeof entry.token === 'object') {
       cleaned.token = entry.token
     }
@@ -4690,6 +4764,8 @@ function readDesktopConnectionConfig() {
       // or 'token' (legacy static session token). Default to 'token' for
       // backward compatibility with configs written before OAuth support.
       remote.authMode = remote.authMode === 'oauth' ? 'oauth' : 'token'
+      // Opt-in TLS bypass for a self-signed / untrusted gateway certificate.
+      remote.allowInvalidCertificate = remote.allowInvalidCertificate === true
       config = {
         mode: parsed.mode === 'remote' ? 'remote' : 'local',
         remote,
@@ -4870,6 +4946,7 @@ async function sanitizeDesktopConnectionConfig(config = readDesktopConnectionCon
     // Echo the scope back so the UI knows which profile (if any) this reflects.
     profile: key,
     remoteAuthMode: authMode,
+    remoteAllowInvalidCertificate: block.allowInvalidCertificate === true,
     remoteOauthConnected,
     remoteUrl,
     remoteTokenPreview: tokenPreview(remoteToken),
@@ -4883,11 +4960,16 @@ async function sanitizeDesktopConnectionConfig(config = readDesktopConnectionCon
 // Build + validate a `{ url, authMode, token }` remote block. OAuth gateways
 // authenticate via the login-window session cookie (verified at connect time in
 // resolveRemoteBackend), so only token-auth remotes require a saved token.
-function buildRemoteBlock(remoteUrl, authMode, token) {
+function buildRemoteBlock(remoteUrl, authMode, token, allowInvalidCertificate) {
   if (authMode !== 'oauth' && !decryptDesktopSecret(token)) {
     throw new Error('Remote gateway session token is required.')
   }
-  return { url: normalizeRemoteBaseUrl(remoteUrl), authMode, token }
+  return {
+    url: normalizeRemoteBaseUrl(remoteUrl),
+    authMode,
+    token,
+    allowInvalidCertificate: allowInvalidCertificate === true
+  }
 }
 
 function coerceDesktopConnectionConfig(input = {}, existing = readDesktopConnectionConfig(), options = {}) {
@@ -4906,13 +4988,19 @@ function coerceDesktopConnectionConfig(input = {}, existing = readDesktopConnect
       ? encryptDesktopSecret(incomingToken)
       : { encoding: 'plain', value: incomingToken }
     : existingBlock.token
+  // allowInvalidCertificate: explicit input wins; otherwise inherit the saved
+  // value. Defaults to false so verification stays on unless a user opts in.
+  const allowInvalidCertificate =
+    typeof input.remoteAllowInvalidCertificate === 'boolean'
+      ? input.remoteAllowInvalidCertificate
+      : existingBlock.allowInvalidCertificate === true
 
   if (key) {
     // Per-profile scope: a remote entry pins this profile to its own backend; a
     // local entry clears the override so the profile inherits the default.
     const profiles = { ...(existing.profiles || {}) }
     if (mode === 'remote') {
-      profiles[key] = { mode: 'remote', ...buildRemoteBlock(remoteUrl, authMode, nextToken) }
+      profiles[key] = { mode: 'remote', ...buildRemoteBlock(remoteUrl, authMode, nextToken, allowInvalidCertificate) }
     } else {
       delete profiles[key]
     }
@@ -4921,8 +5009,13 @@ function coerceDesktopConnectionConfig(input = {}, existing = readDesktopConnect
 
   const nextRemote =
     mode === 'remote'
-      ? buildRemoteBlock(remoteUrl, authMode, nextToken)
-      : { url: remoteUrl ? normalizeRemoteBaseUrl(remoteUrl) : remoteUrl, authMode, token: nextToken }
+      ? buildRemoteBlock(remoteUrl, authMode, nextToken, allowInvalidCertificate)
+      : {
+          url: remoteUrl ? normalizeRemoteBaseUrl(remoteUrl) : remoteUrl,
+          authMode,
+          token: nextToken,
+          allowInvalidCertificate
+        }
 
   // Preserve per-profile overrides when saving the global connection.
   return { mode, remote: nextRemote, profiles: existing.profiles || {} }
@@ -4933,8 +5026,9 @@ function coerceDesktopConnectionConfig(input = {}, existing = readDesktopConnect
 // and is shared by the per-profile, env, and global resolution paths. `token`
 // is the DECRYPTED static token (or null in OAuth mode). `source` is a label
 // for diagnostics ('profile' | 'env' | 'settings').
-async function buildRemoteConnection(rawUrl, authMode, token, source) {
+async function buildRemoteConnection(rawUrl, authMode, token, source, allowInvalidCertificate) {
   const baseUrl = normalizeRemoteBaseUrl(rawUrl)
+  const insecureTls = allowInvalidCertificate === true
 
   if (authMode === 'oauth') {
     // OAuth gateway: auth comes from the session cookies in the OAuth
@@ -4971,6 +5065,7 @@ async function buildRemoteConnection(rawUrl, authMode, token, source) {
       mode: 'remote',
       source,
       authMode: 'oauth',
+      allowInvalidCertificate: insecureTls,
       // No static token in OAuth mode; REST is cookie-authed via the partition.
       token: null,
       wsUrl: buildGatewayWsUrlWithTicket(baseUrl, ticket)
@@ -4989,6 +5084,7 @@ async function buildRemoteConnection(rawUrl, authMode, token, source) {
     mode: 'remote',
     source,
     authMode: 'token',
+    allowInvalidCertificate: insecureTls,
     token,
     wsUrl: buildGatewayWsUrl(baseUrl, token)
   }
@@ -5010,7 +5106,7 @@ async function resolveRemoteBackend(profile) {
   const override = profileRemoteOverride(config, profile)
   if (override) {
     const token = override.authMode === 'oauth' ? null : decryptDesktopSecret(override.token)
-    return buildRemoteConnection(override.url, override.authMode, token, 'profile')
+    return buildRemoteConnection(override.url, override.authMode, token, 'profile', override.allowInvalidCertificate)
   }
 
   // 2. Env override (global, token-auth only).
@@ -5032,7 +5128,7 @@ async function resolveRemoteBackend(profile) {
   }
   const authMode = normAuthMode(config.remote?.authMode)
   const token = authMode === 'oauth' ? null : decryptDesktopSecret(config.remote?.token)
-  return buildRemoteConnection(config.remote?.url, authMode, token, 'settings')
+  return buildRemoteConnection(config.remote?.url, authMode, token, 'settings', config.remote?.allowInvalidCertificate)
 }
 
 // A remote profile's sessions live on its remote host's state.db, not on a local
@@ -5068,10 +5164,15 @@ async function requestJsonForProfile(profile, path, method, body) {
   const conn = await ensureBackend(profile)
   const url = `${conn.baseUrl}${path}`
   const opts = { method, body, timeoutMs: DEFAULT_FETCH_TIMEOUT_MS }
+  // Carry the resolved remote's TLS-bypass opt-in into the Node REST leg. The
+  // Electron `net` leg (OAuth) is handled by the session verify proc instead.
+  if (conn.allowInvalidCertificate) {
+    opts.rejectUnauthorized = false
+  }
   return conn.authMode === 'oauth' ? fetchJsonViaOauthSession(url, opts) : fetchJson(url, conn.token, opts)
 }
 
-async function probeRemoteAuthMode(rawUrl) {
+async function probeRemoteAuthMode(rawUrl, allowInvalidCertificate) {
   // Determine how a remote gateway expects callers to authenticate, WITHOUT
   // sending any credentials. ``/api/status`` is public on every Hermes
   // gateway (it backs the portal liveness probe) and reports:
@@ -5084,11 +5185,16 @@ async function probeRemoteAuthMode(rawUrl) {
   // OAuth login button vs a session-token entry box. Network/parse failures
   // surface as ``reachable: false`` rather than throwing, so a half-typed or
   // unreachable URL degrades to "can't tell yet" instead of a hard error.
+  //
+  // `allowInvalidCertificate` is the live toggle value from the settings form
+  // (the config may not be saved yet while the user types), so a self-signed
+  // gateway can be probed before it is persisted.
   const baseUrl = normalizeRemoteBaseUrl(rawUrl)
+  const publicOpts = { timeoutMs: 8_000, ...(allowInvalidCertificate ? { rejectUnauthorized: false } : {}) }
 
   let status
   try {
-    status = await fetchPublicJson(`${baseUrl}/api/status`, { timeoutMs: 8_000 })
+    status = await fetchPublicJson(`${baseUrl}/api/status`, publicOpts)
   } catch (error) {
     return {
       baseUrl,
@@ -5110,7 +5216,7 @@ async function probeRemoteAuthMode(rawUrl) {
     // an OAuth-redirect one (``supports_password``). A failure here doesn't
     // change the auth mode, so swallow it.
     try {
-      const body = await fetchPublicJson(`${baseUrl}/api/auth/providers`, { timeoutMs: 8_000 })
+      const body = await fetchPublicJson(`${baseUrl}/api/auth/providers`, publicOpts)
       if (Array.isArray(body?.providers)) {
         providers = body.providers
           .filter(p => p && typeof p === 'object')
@@ -5151,9 +5257,11 @@ async function testDesktopConnectionConfig(input = {}) {
   let baseUrl
   let token = null
   let authMode = 'token'
+  let allowInvalidCertificate = false
   if (wantRemote && block?.url) {
     baseUrl = normalizeRemoteBaseUrl(block.url)
     authMode = normAuthMode(block.authMode)
+    allowInvalidCertificate = block.allowInvalidCertificate === true
     if (authMode !== 'oauth') {
       token = decryptDesktopSecret(block.token)
     }
@@ -5162,8 +5270,12 @@ async function testDesktopConnectionConfig(input = {}) {
     baseUrl = remote.baseUrl
     token = remote.token
     authMode = normAuthMode(remote.authMode)
+    allowInvalidCertificate = remote.allowInvalidCertificate === true
   }
-  const status = await fetchJson(`${baseUrl}/api/status`, token, { timeoutMs: 8_000 })
+  const status = await fetchJson(`${baseUrl}/api/status`, token, {
+    timeoutMs: 8_000,
+    ...(allowInvalidCertificate ? { rejectUnauthorized: false } : {})
+  })
 
   // The HTTP status check above proves the backend is reachable, but the chat
   // surface only works once the renderer's live WebSocket to ``/api/ws``
@@ -5173,10 +5285,18 @@ async function testDesktopConnectionConfig(input = {}) {
   // connect to Hermes gateway". Mirror the renderer's connect here so the test
   // reflects the full path the app actually uses.
   const wsUrl = await resolveTestWsUrl(baseUrl, authMode, token, { mintTicket: mintGatewayWsTicket })
-  // Skip the WS leg only when the runtime genuinely lacks a WebSocket (so an
-  // older Electron/Node never fails the test spuriously); Electron's main
-  // process ships a global WebSocket on every supported version.
-  if (wsUrl && typeof globalThis.WebSocket === 'function') {
+  // Skip the WS leg when the runtime genuinely lacks a WebSocket (so an older
+  // Electron/Node never fails the test spuriously); Electron's main process
+  // ships a global WebSocket on every supported version.
+  //
+  // Also skip it under the self-signed opt-in: the main-process global
+  // WebSocket is Node's (undici), which the Electron session verify proc does
+  // NOT cover, and its TLS verification can't be relaxed without bundling an
+  // extra dependency into the packaged app. The REST leg above already proved
+  // reachability with the bypass, and the REAL boot WebSocket runs in the
+  // renderer (Chromium, covered by installCertificateBypass) — so a passing
+  // REST check here is a faithful signal for a self-signed gateway.
+  if (wsUrl && typeof globalThis.WebSocket === 'function' && !allowInvalidCertificate) {
     const probe = await probeGatewayWebSocket(wsUrl, { WebSocketImpl: globalThis.WebSocket })
     if (!probe.ok) {
       throw new Error(
@@ -5353,7 +5473,7 @@ async function spawnPoolBackend(profile, entry) {
   // tolerate.
   const remote = await resolveRemoteBackend(profile)
   if (remote) {
-    await waitForHermes(remote.baseUrl, remote.token)
+    await waitForHermes(remote.baseUrl, remote.token, remote.allowInvalidCertificate ? { rejectUnauthorized: false } : {})
     return {
       ...remote,
       profile,
@@ -5577,7 +5697,7 @@ async function startHermes() {
     const remote = await resolveRemoteBackend(primaryProfileKey())
     if (remote) {
       await advanceBootProgress('backend.remote', `Connecting to remote Hermes backend at ${remote.baseUrl}`, 24)
-      await waitForHermes(remote.baseUrl, remote.token)
+      await waitForHermes(remote.baseUrl, remote.token, remote.allowInvalidCertificate ? { rejectUnauthorized: false } : {})
       updateBootProgress({
         phase: 'backend.ready',
         message: 'Remote Hermes backend is ready',
@@ -5590,6 +5710,7 @@ async function startHermes() {
         mode: 'remote',
         source: remote.source,
         authMode: remote.authMode || 'token',
+        allowInvalidCertificate: remote.allowInvalidCertificate === true,
         token: remote.token,
         wsUrl: remote.wsUrl,
         logs: hermesLog.slice(-80),
@@ -6175,7 +6296,10 @@ ipcMain.handle('hermes:connection:revalidate', async () => {
 
   const base = conn.baseUrl.replace(/\/+$/, '')
   try {
-    await fetchPublicJson(`${base}/api/status`, { timeoutMs: 2_500 })
+    await fetchPublicJson(`${base}/api/status`, {
+      timeoutMs: 2_500,
+      ...(conn.allowInvalidCertificate ? { rejectUnauthorized: false } : {})
+    })
     return { ok: true, rebuilt: false }
   } catch {
     // Unreachable remote: drop the stale cache so the renderer's next reconnect
@@ -6395,7 +6519,9 @@ ipcMain.handle('hermes:connection-config:get', async (_event, profile) =>
   sanitizeDesktopConnectionConfig(readDesktopConnectionConfig(), profile)
 )
 ipcMain.handle('hermes:connection-config:test', async (_event, payload) => testDesktopConnectionConfig(payload))
-ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl) => probeRemoteAuthMode(rawUrl))
+ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl, allowInvalidCertificate) =>
+  probeRemoteAuthMode(rawUrl, allowInvalidCertificate === true)
+)
 ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) => {
   // Open the gateway's OAuth login window and wait for the session cookie to
   // land in the OAuth partition. The caller (settings UI) typically saves the
@@ -6562,7 +6688,8 @@ async function mergeRemoteProfileSessions(searchParams, remoteProfiles) {
   const primary = await ensureBackend(null)
   const base = await fetchJson(`${primary.baseUrl}/api/profiles/sessions?${searchParams}`, primary.token, {
     method: 'GET',
-    timeoutMs: DEFAULT_FETCH_TIMEOUT_MS
+    timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+    ...(primary.allowInvalidCertificate ? { rejectUnauthorized: false } : {})
   }).catch(() => ({ sessions: [], total: 0, profile_totals: {} }))
 
   // Over-fetch each remote from offset 0 (limit+offset rows) so the merged window
@@ -6630,7 +6757,8 @@ ipcMain.handle('hermes:api', async (_event, request) => {
   return fetchJson(url, connection.token, {
     method: request?.method,
     body: request?.body,
-    timeoutMs
+    timeoutMs,
+    ...(connection.allowInvalidCertificate ? { rejectUnauthorized: false } : {})
   })
 })
 
@@ -7666,6 +7794,7 @@ app.whenReady().then(() => {
     Menu.setApplicationMenu(null)
   }
   installMediaPermissions()
+  installCertificateBypass()
   registerMediaProtocol()
   installEmbedReferer()
   registerDeepLinkProtocol()

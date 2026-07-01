@@ -11,6 +11,7 @@ export type ConnectionProbeStatus = 'idle' | 'probing' | 'done' | 'error'
 export interface GatewayConnectionState {
   envOverride: boolean
   mode: ConnectionMode
+  remoteAllowInvalidCertificate: boolean
   remoteAuthMode: ConnectionAuthMode
   remoteOauthConnected: boolean
   remoteTokenPreview: string | null
@@ -21,6 +22,7 @@ export interface GatewayConnectionState {
 export const EMPTY_CONNECTION_STATE: GatewayConnectionState = {
   envOverride: false,
   mode: 'local',
+  remoteAllowInvalidCertificate: false,
   remoteAuthMode: 'token',
   remoteOauthConnected: false,
   remoteTokenPreview: null,
@@ -115,7 +117,7 @@ export function useGatewayConnection(scope: null | string) {
 
     const timer = setTimeout(() => {
       desktop
-        .probeConnectionConfig(trimmedUrl)
+        .probeConnectionConfig(trimmedUrl, state.remoteAllowInvalidCertificate)
         .then(result => {
           if (seq !== probeSeq.current) {
             return
@@ -135,7 +137,7 @@ export function useGatewayConnection(scope: null | string) {
     }, 500)
 
     return () => clearTimeout(timer)
-  }, [state.mode, trimmedUrl])
+  }, [state.mode, trimmedUrl, state.remoteAllowInvalidCertificate])
 
   // Effective auth mode: a reachable probe wins; otherwise fall back to the
   // saved config's mode so a re-open doesn't flicker.
@@ -200,9 +202,13 @@ export function useGatewayConnection(scope: null | string) {
   const setMode = (mode: ConnectionMode) => setState(current => ({ ...current, mode }))
   const setRemoteUrl = (remoteUrl: string) => setState(current => ({ ...current, remoteUrl }))
 
+  const setAllowInvalidCertificate = (remoteAllowInvalidCertificate: boolean) =>
+    setState(current => ({ ...current, remoteAllowInvalidCertificate }))
+
   const payload = () => ({
     mode: state.mode,
     profile: scope ?? undefined,
+    remoteAllowInvalidCertificate: state.remoteAllowInvalidCertificate,
     remoteAuthMode: authMode,
     remoteToken: authMode === 'token' ? remoteToken.trim() || undefined : undefined,
     remoteUrl: trimmedUrl
@@ -279,6 +285,7 @@ export function useGatewayConnection(scope: null | string) {
       const saved = await window.hermesDesktop.saveConnectionConfig({
         mode: state.mode,
         profile: scope ?? undefined,
+        remoteAllowInvalidCertificate: state.remoteAllowInvalidCertificate,
         remoteAuthMode: 'oauth',
         remoteUrl: trimmedUrl
       })
@@ -344,6 +351,7 @@ export function useGatewayConnection(scope: null | string) {
       const result = await window.hermesDesktop.testConnectionConfig({
         mode: 'remote',
         profile: scope ?? undefined,
+        remoteAllowInvalidCertificate: state.remoteAllowInvalidCertificate,
         remoteAuthMode: authMode,
         remoteToken: authMode === 'token' ? remoteToken.trim() || undefined : undefined,
         remoteUrl: trimmedUrl
@@ -375,6 +383,7 @@ export function useGatewayConnection(scope: null | string) {
     remoteToken,
     save,
     saving,
+    setAllowInvalidCertificate,
     setMode,
     setRemoteToken,
     setRemoteUrl,

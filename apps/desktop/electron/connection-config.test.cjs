@@ -76,13 +76,29 @@ test('profileRemoteOverride returns the per-profile remote with defaulted auth m
   assert.deepEqual(profileRemoteOverride(config, 'coder'), {
     url: 'https://coder.example.com/hermes',
     authMode: 'token',
-    token: { value: 'sek' }
+    token: { value: 'sek' },
+    allowInvalidCertificate: false
   })
 })
 
 test('profileRemoteOverride preserves an explicit oauth auth mode', () => {
   const config = { profiles: { coder: { mode: 'remote', url: 'https://x', authMode: 'oauth' } } }
   assert.equal(profileRemoteOverride(config, 'coder').authMode, 'oauth')
+})
+
+test('profileRemoteOverride defaults allowInvalidCertificate to false', () => {
+  const config = { profiles: { coder: { mode: 'remote', url: 'https://x' } } }
+  assert.equal(profileRemoteOverride(config, 'coder').allowInvalidCertificate, false)
+})
+
+test('profileRemoteOverride surfaces an explicit allowInvalidCertificate opt-in', () => {
+  const config = { profiles: { coder: { mode: 'remote', url: 'https://x', allowInvalidCertificate: true } } }
+  assert.equal(profileRemoteOverride(config, 'coder').allowInvalidCertificate, true)
+})
+
+test('profileRemoteOverride treats a non-true allowInvalidCertificate as false', () => {
+  const config = { profiles: { coder: { mode: 'remote', url: 'https://x', allowInvalidCertificate: 'yes' } } }
+  assert.equal(profileRemoteOverride(config, 'coder').allowInvalidCertificate, false)
 })
 
 test('profileRemoteOverride tolerates a missing/!object profiles map', () => {

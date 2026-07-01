@@ -26,6 +26,7 @@ const LOCAL_CONFIG: DesktopConnectionConfig = {
   envOverride: false,
   mode: 'local',
   profile: null,
+  remoteAllowInvalidCertificate: false,
   remoteAuthMode: 'token',
   remoteOauthConnected: false,
   remoteTokenPreview: null,
@@ -37,6 +38,7 @@ const REMOTE_CONFIG: DesktopConnectionConfig = {
   envOverride: false,
   mode: 'remote',
   profile: null,
+  remoteAllowInvalidCertificate: false,
   remoteAuthMode: 'token',
   remoteOauthConnected: false,
   remoteTokenPreview: '••••1234',
@@ -129,7 +131,7 @@ describe('ConnectionModeDialog', () => {
     fireEvent.change(url, { target: { value: 'https://gateway.example.com/hermes' } })
 
     // Debounced probe resolves as a token gateway → token box surfaces.
-    await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes'), {
+    await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false), {
       timeout: 2000
     })
     const token = await screen.findByPlaceholderText('Paste session token')
@@ -141,6 +143,7 @@ describe('ConnectionModeDialog', () => {
     expect(applyConnectionConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: 'remote',
+        remoteAllowInvalidCertificate: false,
         remoteAuthMode: 'token',
         remoteToken: 'secret-token',
         remoteUrl: 'https://gateway.example.com/hermes'
@@ -148,6 +151,41 @@ describe('ConnectionModeDialog', () => {
     )
     // A successful apply closes the dialog.
     await waitFor(() => expect($connectionModeDialog.get().open).toBe(false))
+  })
+
+  it('sends the self-signed certificate opt-in when the toggle is on', async () => {
+    renderDialog()
+    openConnectionModeDialog()
+    await waitFor(() => expect(screen.getByText('Client Mode')).toBeTruthy())
+
+    fireEvent.click(screen.getByText('Client Mode'))
+
+    const url = await screen.findByPlaceholderText(/gateway.example.com/i)
+    fireEvent.change(url, { target: { value: 'https://gateway.example.com/hermes' } })
+
+    await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false), {
+      timeout: 2000
+    })
+    const token = await screen.findByPlaceholderText('Paste session token')
+    fireEvent.change(token, { target: { value: 'secret-token' } })
+
+    // Flip the self-signed-certificate switch on; the probe re-runs with the opt-in.
+    fireEvent.click(screen.getByRole('switch'))
+    await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', true), {
+      timeout: 2000
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+
+    await waitFor(() =>
+      expect(applyConnectionConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: 'remote',
+          remoteAllowInvalidCertificate: true,
+          remoteUrl: 'https://gateway.example.com/hermes'
+        })
+      )
+    )
   })
 
   it('switches an already-remote install back to Local Runtime', async () => {
@@ -172,7 +210,7 @@ describe('ConnectionModeDialog', () => {
     await waitFor(() => expect((url as HTMLInputElement).value).toBe('https://vps.example.com/hermes'))
     // Seeded token rides along so the user can Connect without re-typing it.
     await waitFor(() =>
-      expect(probeConnectionConfig).toHaveBeenCalledWith('https://vps.example.com/hermes'), { timeout: 2000 }
+      expect(probeConnectionConfig).toHaveBeenCalledWith('https://vps.example.com/hermes', false), { timeout: 2000 }
     )
   })
 
@@ -214,7 +252,7 @@ describe('ConnectionModeDialog', () => {
       const url = await screen.findByPlaceholderText(/gateway.example.com/i)
       fireEvent.change(url, { target: { value: 'https://gateway.example.com/hermes' } })
 
-      await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes'), {
+      await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false), {
         timeout: 2000
       })
       const token = await screen.findByPlaceholderText('Paste session token')
@@ -224,6 +262,33 @@ describe('ConnectionModeDialog', () => {
 
       await waitFor(() => expect(firstRunComplete).toHaveBeenCalledWith('remote'))
       await waitFor(() => expect(applyConnectionConfig).toHaveBeenCalledTimes(1))
+    })
+
+    it('does NOT record the remote choice when apply fails', async () => {
+      applyConnectionConfig.mockRejectedValueOnce(new Error('connect failed'))
+
+      renderDialog()
+      openFirstRunConnectionChoice()
+
+      await waitFor(() => expect(screen.getByText('Client Mode')).toBeTruthy())
+      fireEvent.click(screen.getByText('Client Mode'))
+
+      const url = await screen.findByPlaceholderText(/gateway.example.com/i)
+      fireEvent.change(url, { target: { value: 'https://gateway.example.com/hermes' } })
+
+      await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false), {
+        timeout: 2000
+      })
+      const token = await screen.findByPlaceholderText('Paste session token')
+      fireEvent.change(token, { target: { value: 'secret-token' } })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+
+      // apply threw → the remote choice must NOT be recorded (chooser stays valid
+      // next launch), and the blocking gate stays open.
+      await waitFor(() => expect(applyConnectionConfig).toHaveBeenCalledTimes(1))
+      expect(firstRunComplete).not.toHaveBeenCalledWith('remote')
+      expect($connectionModeDialog.get().open).toBe(true)
     })
 
     it('cannot be dismissed with Escape while in first-run mode', async () => {

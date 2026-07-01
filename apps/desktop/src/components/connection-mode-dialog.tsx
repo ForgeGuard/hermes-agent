@@ -7,6 +7,7 @@ import { useGatewayConnection } from '@/app/settings/use-gateway-connection'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { useI18n } from '@/i18n'
 import { AlertCircle, Check, Globe, Loader2, LogIn, Monitor } from '@/lib/icons'
 import { cn } from '@/lib/utils'
@@ -80,6 +81,7 @@ function DialogBody({ firstRun, prefill }: { firstRun: boolean; prefill: Connect
     remoteToken,
     save,
     saving,
+    setAllowInvalidCertificate,
     setMode,
     setRemoteToken,
     setRemoteUrl,
@@ -136,14 +138,15 @@ function DialogBody({ firstRun, prefill }: { firstRun: boolean; prefill: Connect
   }
 
   const connect = async () => {
-    // First run: remember the remote pick BEFORE apply (apply reloads the
-    // window). Only after canUseRemote passes, so a failed/incomplete remote
-    // never records 'remote' with no saved config behind it.
-    if (firstRun && canUseRemote) {
-      await window.hermesDesktop?.firstRunChoice?.complete?.('remote').catch(() => undefined)
-    }
-
+    // Persist + apply the remote config FIRST. Only record the first-run 'remote'
+    // pick after apply actually succeeds, so a failed/incomplete remote never
+    // suppresses the chooser with no usable saved backend behind it. (save(true)
+    // already gates on canUseRemote and warns when the remote is incomplete.)
     if (await save(true)) {
+      if (firstRun) {
+        await window.hermesDesktop?.firstRunChoice?.complete?.('remote').catch(() => undefined)
+      }
+
       notify({ kind: 'success', title: c.connectedTitle, message: c.connectedMessage })
       closeConnectionModeDialog()
     }
@@ -288,6 +291,23 @@ function DialogBody({ firstRun, prefill }: { firstRun: boolean; prefill: Connect
                   />
                 </label>
               ) : null}
+
+              {/* TLS bypass for a self-signed / untrusted gateway certificate. */}
+              <label className="flex items-start justify-between gap-3">
+                <span className="grid gap-1">
+                  <span className="text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-secondary)">
+                    {c.insecureCertTitle}
+                  </span>
+                  <span className="text-[length:var(--conversation-caption-font-size)] leading-(--conversation-caption-line-height) text-(--ui-text-tertiary)">
+                    {c.insecureCertDesc}
+                  </span>
+                </span>
+                <Switch
+                  checked={state.remoteAllowInvalidCertificate}
+                  disabled={state.envOverride}
+                  onCheckedChange={setAllowInvalidCertificate}
+                />
+              </label>
 
               {lastTest ? <div className="text-xs text-primary">{lastTest}</div> : null}
             </div>

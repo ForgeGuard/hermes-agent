@@ -196,7 +196,9 @@ export const en: Translations = {
     firstRunClientDesc: 'Skip the local install and connect to a Hermes backend that is already running elsewhere.',
     firstRunSetUpLocal: 'Set up local Hermes',
     firstRunLocalToastTitle: 'Setting up local Hermes',
-    firstRunLocalToastMessage: 'Hermes Desktop will install and start the local runtime.'
+    firstRunLocalToastMessage: 'Hermes Desktop will install and start the local runtime.',
+    insecureCertTitle: 'Allow self-signed certificate',
+    insecureCertDesc: 'Skip TLS certificate checks for this gateway. Only enable for a server you trust and control.'
   },
 
   titlebar: {
@@ -574,6 +576,9 @@ export const en: Translations = {
       authNeedsOauth: provider => `This gateway uses OAuth. Sign in with ${provider} to authorize this desktop app.`,
       tokenTitle: 'Session token',
       tokenDesc: 'The dashboard session token used for REST and WebSocket access. Leave blank to keep the saved token.',
+      insecureCertTitle: 'Allow self-signed certificate',
+      insecureCertDesc:
+        'Skip TLS certificate verification for this remote gateway. Use only for a server you control with a self-signed or otherwise untrusted certificate.',
       existingToken: value => `Existing token ${value}`,
       savedToken: 'saved',
       pasteSessionToken: 'Paste session token',

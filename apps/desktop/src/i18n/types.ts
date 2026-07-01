@@ -239,6 +239,8 @@ export interface Translations {
     firstRunSetUpLocal: string
     firstRunLocalToastTitle: string
     firstRunLocalToastMessage: string
+    insecureCertTitle: string
+    insecureCertDesc: string
   }
 
   titlebar: {
@@ -485,6 +487,8 @@ export interface Translations {
       authNeedsOauth: (provider: string) => string
       tokenTitle: string
       tokenDesc: string
+      insecureCertTitle: string
+      insecureCertDesc: string
       existingToken: (value: string) => string
       savedToken: string
       pasteSessionToken: string

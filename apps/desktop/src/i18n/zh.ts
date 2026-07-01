@@ -191,7 +191,9 @@ export const zh: Translations = {
     firstRunClientDesc: '跳过本地安装，连接到已在其他位置运行的 Hermes 后端。',
     firstRunSetUpLocal: '搭建本地 Hermes',
     firstRunLocalToastTitle: '正在搭建本地 Hermes',
-    firstRunLocalToastMessage: 'Hermes 桌面版将安装并启动本地运行时。'
+    firstRunLocalToastMessage: 'Hermes 桌面版将安装并启动本地运行时。',
+    insecureCertTitle: '允许自签名证书',
+    insecureCertDesc: '跳过此网关的 TLS 证书校验。仅在你信任并掌控的服务器上启用。'
   },
 
   titlebar: {
@@ -763,6 +765,8 @@ export const zh: Translations = {
       authNeedsOauth: provider => `此网关使用 OAuth。请使用 ${provider} 登录以授权此桌面应用。`,
       tokenTitle: '会话 token',
       tokenDesc: '用于 REST 和 WebSocket 访问的 dashboard 会话 token。留空则保留已保存的 token。',
+      insecureCertTitle: '允许自签名证书',
+      insecureCertDesc: '跳过此远程网关的 TLS 证书校验。仅在你掌控且使用自签名或其他不受信任证书的服务器上使用。',
       existingToken: value => `现有 token ${value}`,
       savedToken: '已保存',
       pasteSessionToken: '粘贴会话 token',
