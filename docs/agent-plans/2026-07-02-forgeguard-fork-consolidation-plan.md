@@ -1,6 +1,6 @@
 ---
 title: "ForgeGuard Fork Consolidation Plan"
-status: active
+status: complete
 date: 2026-07-02
 type: chore
 target_repo: ForgeGuard/hermes-agent
