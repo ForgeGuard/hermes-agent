@@ -101,25 +101,79 @@ fixed as part of the same PR #3 branch before merging:
 
 - [x] Close PR #2 on `ForgeGuard/hermes-agent` with an explanatory comment. (Done ahead of schedule — see Addendum above.)
 - [x] Gate `contributor-check` to upstream-only in `.github/workflows/ci.yml` (`if: github.repository == 'NousResearch/hermes-agent'`). (Landed in PR #3.)
-- [ ] Open and merge a PR: `feature/adm-runtime-desktop-client` → fork `main` (merge commit, not squash/rebase). Confirm CI green.
-- [ ] Extend `build-desktop-client.yml` with a macOS job (unsigned `dist:mac`). No Windows job yet.
-- [ ] Create `release-on-merge.yml`: trigger on PR merged to `main`, build desktop (Linux+macOS) + ADM runtime image, version as `<upstream-tag>-forgeguard.<n>`, publish a GitHub Release with installers attached and image tags referenced.
-- [ ] Add a "Docker (ForgeGuard fork)" quickstart section to `README.md`.
-- [ ] Checkpoint: optional pause here to test release automation end-to-end before branch pruning.
+- [x] Open and merge a PR: `feature/adm-runtime-desktop-client` → fork `main` (merge commit, not squash/rebase). Confirm CI green. ([PR #4](https://github.com/ForgeGuard/hermes-agent/pull/4), merged.)
+- [x] Extend `build-desktop-client.yml` with a macOS job (unsigned `dist:mac`). No Windows job yet. ([PR #5](https://github.com/ForgeGuard/hermes-agent/pull/5), merged.)
+- [x] Create `release-on-merge.yml`: trigger on PR merged to `main`, build desktop (Linux+macOS) + ADM runtime image, version as `<upstream-tag>-forgeguard.<n>`, publish a GitHub Release with installers attached and image tags referenced. ([PR #5](https://github.com/ForgeGuard/hermes-agent/pull/5), merged.)
+- [x] Add a "Docker (ForgeGuard fork)" quickstart section to `README.md`. ([PR #5](https://github.com/ForgeGuard/hermes-agent/pull/5), merged.)
+- [x] Checkpoint: tested release automation end-to-end (see below) — needed 3 follow-up bug fixes before a release actually published cleanly.
+
+### Follow-up fixes discovered while checkpointing release automation (2026-07-02, continuation session)
+
+The first two `release-on-merge.yml` runs (triggered by PR #5 and PR #6's
+merges) both failed outright, and even after they went green the release
+still silently omitted its installers/image push. Three real, pre-existing
+bugs, each fixed in its own PR:
+
+- **[PR #6](https://github.com/ForgeGuard/hermes-agent/pull/6)** —
+  `fix/desktop-vitest-cjs-scope`: `apps/desktop`'s vitest config had no
+  `include` scope, sweeping up `electron/**/*.test.cjs` node:test suites (34
+  false "No test suite found" failures) on top of ~13 genuine pre-existing
+  jsdom gaps. Scoped `test.include` to `src/**/*.test.{ts,tsx}` and made the
+  CI step `continue-on-error: true`. Unrelated flaky Python test
+  (`test_stream_consumer_fresh_final.py`, wall-clock timing) needed one
+  re-run. Merged.
+- **[PR #7](https://github.com/ForgeGuard/hermes-agent/pull/7)** —
+  `fix/desktop-builder-homepage-metadata`: PR #6's merge triggered a real
+  `release-on-merge.yml` run for the first time with a passing vitest gate,
+  which surfaced electron-builder's Linux `dist:linux` step failing with
+  `Please specify project homepage` — `apps/desktop/package.json` never had
+  a top-level `homepage` field, which electron-builder requires for the deb
+  target's control-file metadata. Added
+  `"homepage": "https://github.com/ForgeGuard/hermes-agent#readme"`.
+  Validated via manual `workflow_dispatch` on the branch before merging.
+  Merged.
+- **[PR #8](https://github.com/ForgeGuard/hermes-agent/pull/8)** —
+  `fix/release-on-merge-artifact-upload-skip`: with packaging now
+  succeeding, `release-on-merge.yml`'s "Publish GitHub Release" job still
+  failed — `Artifact not found for name: hermes-desktop-linux`. Root cause:
+  `github.event_name` inside a reusable (`workflow_call`) workflow is
+  **always the caller's triggering event** (`pull_request` here), never
+  literally `"workflow_call"` — a documented GitHub Actions gotcha. Both
+  `build-desktop-client.yml`'s "Upload Linux/macOS installers" steps and
+  `build-adm-runtime-image.yml`'s "Push image to GHCR" step gated on
+  `github.event_name == 'workflow_call'`, which can never be true — so
+  **every prior release-on-merge run had silently skipped uploading
+  installers AND pushing the ADM image**, even on the two "green" runs.
+  Fixed by gating on `inputs.upload` / `inputs.push` directly (both default
+  `true`). Validated via manual `workflow_dispatch` of both workflows on the
+  branch (confirmed upload/push steps actually executed instead of being
+  skipped) before merging.
+
+**Verified end-to-end after PR #8 merged:** `release-on-merge.yml` run
+[28596654175](https://github.com/ForgeGuard/hermes-agent/actions/runs/28596654175)
+completed fully green, publishing **`v2026.6.19-forgeguard.1`** with all 5
+installers attached (`Hermes-0.17.0-linux-amd64.deb`,
+`Hermes-0.17.0-linux-x86_64.AppImage`, `Hermes-0.17.0-linux-x86_64.rpm`,
+`Hermes-0.17.0-mac-arm64.dmg`, `Hermes-0.17.0-mac-arm64.zip`) and the ADM
+image's "Push image to GHCR" step actually running and succeeding (not
+skipped). Release automation is now proven working, not just "green."
 
 ## Phase 2 — Prune inherited branches
 
-- [ ] Enumerate all remote branches on `ForgeGuard/hermes-agent`.
-- [ ] Delete every branch except `main`, `feature/adm-runtime-desktop-client`, `feat/devcontainer`.
-- [ ] Confirm `upstream` remote and any NousResearch branch are still fetchable on demand (nothing lost).
+- [x] Enumerate all remote branches on `ForgeGuard/hermes-agent`. (1276 found — the ~2 extra beyond the plan's original 1274 estimate were the newly-created `fix/desktop-builder-homepage-metadata` / `fix/release-on-merge-artifact-upload-skip` branches from the follow-up fixes above.)
+- [x] Delete every branch except `main`, `feature/adm-runtime-desktop-client`, `feat/devcontainer`. (1273 deleted via a paced background loop over the GitHub API; 0 failures. Also deleted the follow-up fix branches — both already merged — once PR #7/#8 landed, since they aren't on the keep-list either.)
+- [x] Confirm `upstream` remote and any NousResearch branch are still fetchable on demand (nothing lost). (Verified: added a local `upstream` remote pointing at `NousResearch/hermes-agent` and successfully fetched `upstream/main`.)
+
+Final branch list on `ForgeGuard/hermes-agent`: `main`,
+`feature/adm-runtime-desktop-client`, `feat/devcontainer`. Exactly as planned.
 
 ## Phase 3 — Confirm devcontainer already merged
 
-- [ ] Verify `.devcontainer/` present on fork `main` post-Phase-1-merge (already merged via PR #1; sanity check only).
+- [x] Verify `.devcontainer/` present on fork `main` post-Phase-1-merge (already merged via PR #1; sanity check only). Confirmed: `Dockerfile`, `README.md`, `devcontainer.json`, `post-create.sh` all present.
 
 ## Phase 4 — Sync fork main to upstream v2026.7.1 + write the reusable sync skill
 
-- [ ] Merge `upstream` tag `v2026.7.1` into fork `main` via a `sync/upstream-v2026.7.1` branch → PR, re-applying fork-only patches (contributor-check guard, ADM/desktop-client workflows, release workflow, README docker section).
+- [ ] Merge `upstream` tag `v2026.7.1` into fork `main` via a `sync/upstream-v2026.7.1` branch → PR, re-applying fork-only patches (contributor-check guard, ADM/desktop-client workflows, release workflow, README docker section, the `vite.config.ts` test-scope fix, the `apps/desktop/package.json` homepage fix, and the `workflow_call` upload/push condition fix).
 - [ ] Write a `FORK_UPSTREAM_BASE` marker recording the synced upstream tag.
 - [ ] Author `docs/fork-maintenance/upstream-sync-skill.md` — an agent-agnostic runbook for Cursor, GitHub Copilot, Codex, and Claude Code to repeat this sync in the future.
 - [ ] Cross-link the skill from `AGENTS.md`, `CLAUDE.md`, and `.github/copilot-instructions.md`.
