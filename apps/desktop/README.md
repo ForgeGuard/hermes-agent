@@ -36,6 +36,12 @@ It builds and launches the GUI against your existing install — same config, ke
 
 Prebuilt installers are built and distributed via [the Hermes Desktop website.](https://hermes-agent.nousresearch.com/).
 
+The **ForgeGuard fork** additionally attaches Linux and macOS installers to every
+[GitHub Release](https://github.com/ForgeGuard/hermes-agent/releases). Those macOS builds
+are ad-hoc signed but not notarized — after installing from the `.dmg`, clear the Gatekeeper
+quarantine once with `xattr -cr /Applications/Hermes.app` (details:
+[Desktop → Troubleshooting](https://github.com/ForgeGuard/hermes-agent/blob/main/website/docs/user-guide/desktop.md#macos-hermes-is-damaged-and-cant-be-opened)).
+
 ---
 
 ## Updating

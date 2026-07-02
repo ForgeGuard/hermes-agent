@@ -93,6 +93,8 @@ export function GatewaySettings() {
     lastTest,
     loading,
     oauthConnected,
+    probe,
+    probeRemoteUrl,
     probeStatus,
     providerLabel,
     remoteToken,
@@ -193,6 +195,7 @@ export function GatewaySettings() {
             <Input
               className={cn('h-8', CONTROL_TEXT)}
               disabled={state.envOverride}
+              onBlur={() => void probeRemoteUrl()}
               onChange={event => setRemoteUrl(event.target.value)}
               placeholder="https://gateway.example.com/hermes"
               value={state.remoteUrl}
@@ -212,7 +215,12 @@ export function GatewaySettings() {
         {state.mode === 'remote' && probeStatus === 'error' ? (
           <div className="flex items-start gap-2 py-3 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
             <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            {g.probeError}
+            <span>
+              {g.probeError}
+              {probe?.error ? (
+                <span className="mt-0.5 block font-mono text-(--ui-text-quaternary)">{probe.error}</span>
+              ) : null}
+            </span>
           </div>
         ) : null}
 

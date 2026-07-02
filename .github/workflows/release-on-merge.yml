@@ -143,13 +143,39 @@ jobs:
           docker pull ghcr.io/forgeguard/hermes-agent:adm-latest
           ```
 
+          > [!IMPORTANT]
+          > **Remote deployments need an auth provider as of `v2026.7.1`.** Upstream's
+          > June-2026 hardening means a gateway bound to a non-loopback address (the
+          > container binds `0.0.0.0`) now **refuses to start** unless an auth provider
+          > is configured — `HERMES_DASHBOARD_INSECURE` / `--insecure` and static-token
+          > mode no longer open a public dashboard. Set one of:
+          > - **Password:** `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` + `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`
+          > - **OAuth:** `HERMES_DASHBOARD_OAUTH_CLIENT_ID`
+          >
+          > If the desktop client can't reach an upgraded deployment, check the container
+          > log for `Refusing to bind dashboard to 0.0.0.0` — that means no provider is
+          > set. The desktop connection dialog signs in against either provider.
+
           ### Desktop installers
 
           Linux (`.AppImage`, `.deb`, `.rpm`) and macOS (`.dmg`, `.zip`) installers are
-          attached below. Both are **unsigned** — no Apple Developer or notarization
-          credentials on this fork. Linux needs no extra step; macOS will show the
-          standard Gatekeeper "unidentified developer" warning on first launch
-          (right-click the app, then Open).
+          attached below. They are **not notarized** (no Apple Developer credentials on
+          this fork); the macOS build is ad-hoc signed.
+
+          **Linux:** no extra step.
+
+          **macOS:** because the app isn't notarized, Gatekeeper quarantines it on
+          download and shows *"Hermes is damaged and can't be opened"* — right-click →
+          Open does **not** clear this. After copying Hermes.app to /Applications, strip
+          the quarantine flag once:
+
+          ```bash
+          xattr -cr /Applications/Hermes.app
+          ```
+
+          Then open it normally. (Alternatively, download the `.zip` with
+          `curl -L -o hermes.zip <asset-url>` — a curl download never sets the
+          quarantine attribute, so no `xattr` step is needed.)
           NOTES
           sed -i \
             -e "s/__VERSION__/${VERSION}/g" \

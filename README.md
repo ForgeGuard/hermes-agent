@@ -132,10 +132,21 @@ docker run -d \
   -v ~/.hermes:/opt/data \
   -p 9119:9119 \
   -e HERMES_DASHBOARD=1 \
+  -e HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin \
+  -e HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=choose-a-strong-password \
   ghcr.io/forgeguard/hermes-agent:adm-latest gateway run
 ```
 
-That starts the gateway with the web dashboard on `:9119` — the same backend Hermes Desktop's **Client Mode** connects to. Unsigned Linux (`.AppImage`/`.deb`/`.rpm`) and macOS (`.dmg`/`.zip`) desktop installers are attached to every [GitHub Release](https://github.com/ForgeGuard/hermes-agent/releases) on this fork, built automatically on every merge to `main`.
+That starts the gateway with the web dashboard on `:9119` — the same backend Hermes Desktop's **Client Mode** connects to.
+
+> [!IMPORTANT]
+> **As of `v2026.7.1` the dashboard requires an auth provider on non-loopback binds.** The container binds `0.0.0.0`, and upstream's June-2026 hardening makes such a bind **refuse to start** unless an auth provider is configured — `HERMES_DASHBOARD_INSECURE` and static-token mode no longer open a public dashboard. Set **one** of:
+> - **Password** (shown above): `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` + `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` (optionally `HERMES_DASHBOARD_BASIC_AUTH_SECRET` so sessions survive restarts).
+> - **OAuth:** `HERMES_DASHBOARD_OAUTH_CLIENT_ID`.
+>
+> If a previously working deployment stops accepting connections after pulling a newer image, check the container log for `Refusing to bind dashboard to 0.0.0.0` — that means no provider is set. The desktop **Client Mode** dialog signs in against either provider automatically.
+
+Linux (`.AppImage`/`.deb`/`.rpm`) and macOS (`.dmg`/`.zip`) desktop installers are attached to every [GitHub Release](https://github.com/ForgeGuard/hermes-agent/releases) on this fork, built automatically on every merge to `main`. They are not notarized (no Apple credentials on the fork); the macOS build is ad-hoc signed, so after installing from the `.dmg` run `xattr -cr /Applications/Hermes.app` once to clear the Gatekeeper "damaged" quarantine — see [Desktop → Troubleshooting](website/docs/user-guide/desktop.md#macos-hermes-is-damaged-and-cant-be-opened).
 
 `/opt/data` and every other detail (profiles, dashboard auth, resource limits, upgrading) work exactly like the upstream image — see [Docker → Deployment Manager (ADM) runtime image](website/docs/user-guide/docker.md#deployment-manager-adm-runtime-image) for the full reference; substitute `ghcr.io/forgeguard/hermes-agent` for `nousresearch/hermes-agent` in any command on that page.
 

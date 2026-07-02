@@ -11,11 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import { useI18n } from '@/i18n'
 import { AlertCircle, Check, Globe, Loader2, LogIn, Monitor } from '@/lib/icons'
 import { cn } from '@/lib/utils'
-import {
-  $connectionModeDialog,
-  closeConnectionModeDialog,
-  type ConnectionModePrefill
-} from '@/store/connection-mode'
+import { $connectionModeDialog, closeConnectionModeDialog, type ConnectionModePrefill } from '@/store/connection-mode'
 import { notify } from '@/store/notifications'
 
 function ModeCard({
@@ -76,6 +72,8 @@ function DialogBody({ firstRun, prefill }: { firstRun: boolean; prefill: Connect
     lastTest,
     loading,
     oauthConnected,
+    probe,
+    probeRemoteUrl,
     probeStatus,
     providerLabel,
     remoteToken,
@@ -117,6 +115,9 @@ function DialogBody({ firstRun, prefill }: { firstRun: boolean; prefill: Connect
     if (prefill.token) {
       setRemoteToken(prefill.token)
     }
+
+    // Seeded URLs never get a blur event, so probe the auth mode here.
+    void probeRemoteUrl(prefill.url)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot seed on first load
   }, [loading])
 
@@ -216,6 +217,7 @@ function DialogBody({ firstRun, prefill }: { firstRun: boolean; prefill: Connect
                   autoFocus
                   className="h-8"
                   disabled={state.envOverride}
+                  onBlur={() => void probeRemoteUrl()}
                   onChange={event => setRemoteUrl(event.target.value)}
                   placeholder="https://gateway.example.com/hermes"
                   value={state.remoteUrl}
@@ -235,7 +237,12 @@ function DialogBody({ firstRun, prefill }: { firstRun: boolean; prefill: Connect
               {probeStatus === 'error' ? (
                 <div className="flex items-start gap-2 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
                   <AlertCircle className="mt-0.5 size-4 shrink-0" />
-                  {g.probeError}
+                  <span>
+                    {g.probeError}
+                    {probe?.error ? (
+                      <span className="mt-0.5 block font-mono text-(--ui-text-quaternary)">{probe.error}</span>
+                    ) : null}
+                  </span>
                 </div>
               ) : null}
 
@@ -247,7 +254,11 @@ function DialogBody({ firstRun, prefill }: { firstRun: boolean; prefill: Connect
                       <span className="inline-flex items-center gap-1 rounded-full bg-primary/12 px-2 py-0.5 text-[length:var(--conversation-caption-font-size)] text-primary">
                         <Check className="size-3" /> {g.signedIn}
                       </span>
-                      <Button disabled={signingIn || state.envOverride} onClick={() => void signOut()} variant="outline">
+                      <Button
+                        disabled={signingIn || state.envOverride}
+                        onClick={() => void signOut()}
+                        variant="outline"
+                      >
                         {signingIn ? <Loader2 className="animate-spin" /> : null}
                         {g.signOut}
                       </Button>
@@ -370,10 +381,7 @@ export function ConnectionModeDialog() {
   const blockClose = (event: Event) => event.preventDefault()
 
   return (
-    <Dialog
-      onOpenChange={next => (next || firstRun ? undefined : closeConnectionModeDialog())}
-      open={open}
-    >
+    <Dialog onOpenChange={next => (next || firstRun ? undefined : closeConnectionModeDialog())} open={open}>
       <DialogContent
         className="max-w-xl"
         onEscapeKeyDown={firstRun ? blockClose : undefined}

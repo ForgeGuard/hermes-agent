@@ -5,9 +5,14 @@ name: Build Desktop Client
 # Deployment Manager (or a fork maintainer) has a downloadable client that can
 # point at an ADM runtime image via Client Mode.
 #
-# Linux + macOS for now — both build unsigned (no code-signing/notarization
-# credentials on the fork; scripts/notarize.cjs no-ops without Apple API key
-# env vars, so macOS ships Gatekeeper-warned like a normal unsigned build).
+# Linux + macOS for now. No Developer ID / notarization credentials exist on
+# the fork (scripts/notarize.cjs no-ops without Apple API key env vars), so
+# macOS builds are AD-HOC signed (scripts/after-pack.cjs) rather than fully
+# unsigned: on Apple Silicon a completely unsigned quarantined app fails
+# Gatekeeper with "damaged and can't be opened" and never launches at all
+# (shipped that way in v2026.7.1-forgeguard.1). Ad-hoc-signed installs still
+# need a one-time `xattr -cr /Applications/Hermes.app` after download — the
+# release notes and website/docs/user-guide/desktop.md carry the instructions.
 # Windows stays a follow-up until it's been tested there.
 #
 # The desktop workspace resolves its dependencies from the ROOT install (npm
@@ -159,14 +164,37 @@ jobs:
       - name: Build renderer + main
         run: npm run --prefix apps/desktop build
 
-      # Package the unsigned macOS installers (dmg + zip, per apps/desktop's
-      # electron-builder "mac.target" config). Unsigned/unnotarized: no Apple
-      # Developer identity or notarization credentials on the fork —
-      # scripts/notarize.cjs no-ops when APPLE_API_KEY/APPLE_NOTARY_PROFILE
-      # aren't set, same as any other unsigned OSS Electron build. Users will
-      # see the standard macOS Gatekeeper "unidentified developer" prompt.
+      # Package the macOS installers (dmg + zip, per apps/desktop's
+      # electron-builder "mac.target" config). Not notarized (no Apple
+      # credentials on the fork — scripts/notarize.cjs no-ops), but ALWAYS at
+      # least ad-hoc signed via scripts/after-pack.cjs.
+      #
+      # CSC_FOR_PULL_REQUEST: release-on-merge.yml calls this workflow from a
+      # pull_request event, and electron-builder skips its entire signing pass
+      # for PR builds as a fork-secret-safety heuristic (that skip shipped the
+      # fully unsigned, Gatekeeper-"damaged" v2026.7.1-forgeguard.1 dmg). The
+      # heuristic guards CSC_LINK-style cert secrets, which this repo does not
+      # have, so opting out of the skip is safe here and lets electron-builder
+      # run its normal (identity-less → ad-hoc) signing flow.
       - name: Package macOS installers
+        env:
+          CSC_FOR_PULL_REQUEST: "true"
         run: npm run --prefix apps/desktop dist:mac
+
+      # Fail the build if the packed bundle somehow regresses to unsigned —
+      # an unsigned arm64 app cannot launch on Apple Silicon once quarantined,
+      # so this is a correctness gate, not a nicety. appOutDir is
+      # release/mac-arm64 on arm64 runners and release/mac on x64; glob both.
+      - name: Verify macOS app signature
+        run: |
+          set -euo pipefail
+          app=$(find apps/desktop/release -maxdepth 2 -name "*.app" -type d | head -1)
+          if [ -z "$app" ]; then
+            echo "No .app bundle found under apps/desktop/release" >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --verbose=2 "$app"
 
       # See the matching NOTE on "Upload Linux installers" above.
       - name: Upload macOS installers

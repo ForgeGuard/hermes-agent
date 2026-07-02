@@ -4,16 +4,8 @@ import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type {
-  DesktopConnectionConfig,
-  DesktopConnectionConfigInput,
-  DesktopConnectionProbeResult
-} from '@/global'
-import {
-  $connectionModeDialog,
-  openConnectionModeDialog,
-  openFirstRunConnectionChoice
-} from '@/store/connection-mode'
+import type { DesktopConnectionConfig, DesktopConnectionConfigInput, DesktopConnectionProbeResult } from '@/global'
+import { $connectionModeDialog, openConnectionModeDialog, openFirstRunConnectionChoice } from '@/store/connection-mode'
 
 import { ConnectionModeDialog } from './connection-mode-dialog'
 
@@ -70,7 +62,6 @@ function installDesktop(initial: DesktopConnectionConfig) {
   testConnectionConfig = vi.fn().mockResolvedValue({ baseUrl: TOKEN_PROBE.baseUrl, ok: true, version: '0.17.0' })
   probeConnectionConfig = vi.fn().mockResolvedValue(TOKEN_PROBE)
   firstRunComplete = vi.fn().mockResolvedValue({ ok: true, required: false })
-
   ;(window as { hermesDesktop?: unknown }).hermesDesktop = {
     getConnectionConfig,
     saveConnectionConfig,
@@ -120,6 +111,32 @@ describe('ConnectionModeDialog', () => {
     expect(screen.queryByPlaceholderText(/gateway.example.com/i)).toBeNull()
   })
 
+  it('never probes while the user is typing the URL', async () => {
+    renderDialog()
+    openConnectionModeDialog()
+    await waitFor(() => expect(screen.getByText('Client Mode')).toBeTruthy())
+
+    fireEvent.click(screen.getByText('Client Mode'))
+
+    const url = await screen.findByPlaceholderText(/gateway.example.com/i)
+
+    // Simulate typing: several change events, no blur. Each keystroke used to
+    // flash a "Probing…" spinner and fire a debounced network probe.
+    for (const partial of ['https://g', 'https://gateway.exam', 'https://gateway.example.com/hermes']) {
+      fireEvent.change(url, { target: { value: partial } })
+    }
+
+    // No spinner mid-typing, and no probe even after the old 500ms debounce.
+    expect(screen.queryByText('Checking how this gateway authenticates…')).toBeNull()
+    await new Promise(resolve => setTimeout(resolve, 700))
+    expect(probeConnectionConfig).not.toHaveBeenCalled()
+
+    // Leaving the field is the deliberate moment that probes.
+    fireEvent.blur(url)
+    await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false))
+    expect(probeConnectionConfig).toHaveBeenCalledTimes(1)
+  })
+
   it('guides Client Mode: probe → token → Connect applies the remote config', async () => {
     renderDialog()
     openConnectionModeDialog()
@@ -129,11 +146,15 @@ describe('ConnectionModeDialog', () => {
 
     const url = await screen.findByPlaceholderText(/gateway.example.com/i)
     fireEvent.change(url, { target: { value: 'https://gateway.example.com/hermes' } })
+    fireEvent.blur(url)
 
-    // Debounced probe resolves as a token gateway → token box surfaces.
-    await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false), {
-      timeout: 2000
-    })
+    // Blur probe resolves as a token gateway → token box surfaces.
+    await waitFor(
+      () => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false),
+      {
+        timeout: 2000
+      }
+    )
     const token = await screen.findByPlaceholderText('Paste session token')
     fireEvent.change(token, { target: { value: 'secret-token' } })
 
@@ -162,18 +183,25 @@ describe('ConnectionModeDialog', () => {
 
     const url = await screen.findByPlaceholderText(/gateway.example.com/i)
     fireEvent.change(url, { target: { value: 'https://gateway.example.com/hermes' } })
+    fireEvent.blur(url)
 
-    await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false), {
-      timeout: 2000
-    })
+    await waitFor(
+      () => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false),
+      {
+        timeout: 2000
+      }
+    )
     const token = await screen.findByPlaceholderText('Paste session token')
     fireEvent.change(token, { target: { value: 'secret-token' } })
 
     // Flip the self-signed-certificate switch on; the probe re-runs with the opt-in.
     fireEvent.click(screen.getByRole('switch'))
-    await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', true), {
-      timeout: 2000
-    })
+    await waitFor(
+      () => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', true),
+      {
+        timeout: 2000
+      }
+    )
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
 
@@ -208,10 +236,10 @@ describe('ConnectionModeDialog', () => {
 
     const url = await screen.findByPlaceholderText(/gateway.example.com/i)
     await waitFor(() => expect((url as HTMLInputElement).value).toBe('https://vps.example.com/hermes'))
-    // Seeded token rides along so the user can Connect without re-typing it.
-    await waitFor(() =>
-      expect(probeConnectionConfig).toHaveBeenCalledWith('https://vps.example.com/hermes', false), { timeout: 2000 }
-    )
+    // Seeded URLs get no blur event, so the prefill itself triggers the probe.
+    await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://vps.example.com/hermes', false), {
+      timeout: 2000
+    })
   })
 
   describe('first-run mode', () => {
@@ -251,10 +279,14 @@ describe('ConnectionModeDialog', () => {
 
       const url = await screen.findByPlaceholderText(/gateway.example.com/i)
       fireEvent.change(url, { target: { value: 'https://gateway.example.com/hermes' } })
+      fireEvent.blur(url)
 
-      await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false), {
-        timeout: 2000
-      })
+      await waitFor(
+        () => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false),
+        {
+          timeout: 2000
+        }
+      )
       const token = await screen.findByPlaceholderText('Paste session token')
       fireEvent.change(token, { target: { value: 'secret-token' } })
 
@@ -275,10 +307,14 @@ describe('ConnectionModeDialog', () => {
 
       const url = await screen.findByPlaceholderText(/gateway.example.com/i)
       fireEvent.change(url, { target: { value: 'https://gateway.example.com/hermes' } })
+      fireEvent.blur(url)
 
-      await waitFor(() => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false), {
-        timeout: 2000
-      })
+      await waitFor(
+        () => expect(probeConnectionConfig).toHaveBeenCalledWith('https://gateway.example.com/hermes', false),
+        {
+          timeout: 2000
+        }
+      )
       const token = await screen.findByPlaceholderText('Paste session token')
       fireEvent.change(token, { target: { value: 'secret-token' } })
 

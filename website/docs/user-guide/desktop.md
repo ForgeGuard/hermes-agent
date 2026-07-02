@@ -240,6 +240,31 @@ rm -rf "$HOME/.hermes/hermes-agent/venv"
 tccutil reset Microphone com.nousresearch.hermes
 ```
 
+### macOS: "Hermes is damaged and can't be opened"
+
+This appears when you launch a **prebuilt ForgeGuard fork installer** (the `.dmg`/`.zip`
+attached to a [fork release](https://github.com/ForgeGuard/hermes-agent/releases)) rather
+than a locally built app. The fork's macOS builds are ad-hoc signed but **not notarized**
+— there are no Apple Developer credentials on the fork — so Gatekeeper quarantines the app
+on download and blocks it. The message says "damaged," but nothing is wrong with the
+download, and right-click → Open does **not** clear it on Apple Silicon.
+
+Strip the quarantine attribute once, after copying the app to `/Applications`:
+
+```bash
+xattr -cr /Applications/Hermes.app
+```
+
+Then open it normally. Alternatively, download the release `.zip` (not the `.dmg`) with
+`curl` — a curl download never sets the quarantine attribute, so no `xattr` step is needed:
+
+```bash
+curl -L -o hermes.zip "<zip-asset-url-from-the-release-page>"
+```
+
+(This applies only to the fork's prebuilt binaries. A locally built `hermes desktop` app is
+signed with your own machine's ad-hoc identity and is not quarantined.)
+
 ### "Build desktop app" stuck on Electron download
 
 The build downloads the Electron runtime (~114&nbsp;MB) from `github.com/electron/electron/releases`. If the installer hangs on the **Build desktop app** step with the live output repeating `retrying attempt=…`, GitHub is being blocked or throttled on your network (firewall, proxy, or region).

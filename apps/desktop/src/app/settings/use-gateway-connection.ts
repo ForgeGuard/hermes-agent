@@ -49,12 +49,59 @@ export function useGatewayConnection(scope: null | string) {
   const [remoteToken, setRemoteToken] = useState('')
   const [lastTest, setLastTest] = useState<null | string>(null)
 
-  // Auth-mode probe: as the user types a remote URL we ask the gateway (via its
-  // public /api/status) whether it gates with OAuth or a static session token,
-  // so callers can show the right control (login button vs token box).
+  // Auth-mode probe: ask the gateway (via its public /api/status) whether it
+  // gates with OAuth or a static session token, so callers can show the right
+  // control (login button vs token box). Deliberately ON-DEMAND — input blur,
+  // TLS-opt-in toggle, deep-link prefill, saved-remote load — never while the
+  // user is typing: the previous URL-keyed effect flashed a "Probing…" spinner
+  // on every keystroke and hit the gateway after each 500ms pause.
   const [probeStatus, setProbeStatus] = useState<ConnectionProbeStatus>('idle')
   const [probe, setProbe] = useState<DesktopConnectionProbeResult | null>(null)
   const probeSeq = useRef(0)
+
+  const resetProbe = () => {
+    probeSeq.current += 1
+    setProbe(null)
+    setProbeStatus('idle')
+  }
+
+  const probeWith = async (rawUrl: string, allowInvalidCertificate: boolean) => {
+    const desktop = window.hermesDesktop
+    const url = rawUrl.trim()
+
+    if (!desktop?.probeConnectionConfig || !url || !/^https?:\/\//i.test(url)) {
+      resetProbe()
+
+      return
+    }
+
+    const seq = ++probeSeq.current
+    setProbeStatus('probing')
+
+    try {
+      const result = await desktop.probeConnectionConfig(url, allowInvalidCertificate)
+
+      if (seq !== probeSeq.current) {
+        return
+      }
+
+      setProbe(result)
+      setProbeStatus(result.reachable ? 'done' : 'error')
+    } catch {
+      if (seq !== probeSeq.current) {
+        return
+      }
+
+      setProbe(null)
+      setProbeStatus('error')
+    }
+  }
+
+  // Probe the current (or explicitly given) remote URL. Callers wire this to
+  // deliberate moments — the URL input's onBlur, a prefill seed — so a
+  // half-typed URL is never probed.
+  const probeRemoteUrl = (urlOverride?: string) =>
+    probeWith(urlOverride ?? state.remoteUrl, state.remoteAllowInvalidCertificate)
 
   const available = Boolean(window.hermesDesktop?.getConnectionConfig)
 
@@ -82,6 +129,13 @@ export function useGatewayConnection(scope: null | string) {
         }
 
         setState(config)
+
+        // One probe for a saved remote so the auth-mode UI (login button vs
+        // token box) reflects the gateway's CURRENT auth model on open — e.g.
+        // a deployment upgraded from token to OAuth since the config was saved.
+        if (config.mode === 'remote') {
+          void probeWith(config.remoteUrl, config.remoteAllowInvalidCertificate)
+        }
       })
       .catch(err => notifyError(err, g.failedLoad))
       .finally(() => {
@@ -94,50 +148,7 @@ export function useGatewayConnection(scope: null | string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload on scope change only; copy is stable
   }, [scope])
 
-  // Debounced probe of the entered remote URL. Only runs in remote mode with a
-  // syntactically plausible URL. The probe result drives whether callers render
-  // the OAuth login button or the session-token entry box.
   const trimmedUrl = state.remoteUrl.trim()
-  useEffect(() => {
-    if (state.mode !== 'remote' || !trimmedUrl || !/^https?:\/\//i.test(trimmedUrl)) {
-      setProbeStatus('idle')
-      setProbe(null)
-
-      return
-    }
-
-    const desktop = window.hermesDesktop
-
-    if (!desktop?.probeConnectionConfig) {
-      return
-    }
-
-    const seq = ++probeSeq.current
-    setProbeStatus('probing')
-
-    const timer = setTimeout(() => {
-      desktop
-        .probeConnectionConfig(trimmedUrl, state.remoteAllowInvalidCertificate)
-        .then(result => {
-          if (seq !== probeSeq.current) {
-            return
-          }
-
-          setProbe(result)
-          setProbeStatus(result.reachable ? 'done' : 'error')
-        })
-        .catch(() => {
-          if (seq !== probeSeq.current) {
-            return
-          }
-
-          setProbe(null)
-          setProbeStatus('error')
-        })
-    }, 500)
-
-    return () => clearTimeout(timer)
-  }, [state.mode, trimmedUrl, state.remoteAllowInvalidCertificate])
 
   // Effective auth mode: a reachable probe wins; otherwise fall back to the
   // saved config's mode so a re-open doesn't flicker.
@@ -199,11 +210,29 @@ export function useGatewayConnection(scope: null | string) {
     return Boolean(remoteToken.trim()) || state.remoteTokenSet
   }, [authMode, oauthConnected, remoteToken, state.remoteTokenSet, trimmedUrl])
 
-  const setMode = (mode: ConnectionMode) => setState(current => ({ ...current, mode }))
-  const setRemoteUrl = (remoteUrl: string) => setState(current => ({ ...current, remoteUrl }))
+  const setMode = (mode: ConnectionMode) => {
+    // Clear any stale probe when leaving/re-entering remote so a prior
+    // success/error doesn't linger; the next blur (or prefill) re-probes.
+    resetProbe()
+    setState(current => ({ ...current, mode }))
+  }
 
-  const setAllowInvalidCertificate = (remoteAllowInvalidCertificate: boolean) =>
+  const setRemoteUrl = (remoteUrl: string) => {
+    // Editing the URL invalidates any probe of the previous URL. Reset quietly
+    // (no spinner, no network); the next deliberate probe happens on blur.
+    resetProbe()
+    setState(current => ({ ...current, remoteUrl }))
+  }
+
+  const setAllowInvalidCertificate = (remoteAllowInvalidCertificate: boolean) => {
     setState(current => ({ ...current, remoteAllowInvalidCertificate }))
+
+    // The opt-in changes whether a self-signed gateway is even reachable, so
+    // re-probe with the NEW value (the state update hasn't landed yet).
+    if (state.mode === 'remote') {
+      void probeWith(state.remoteUrl, remoteAllowInvalidCertificate)
+    }
+  }
 
   const payload = () => ({
     mode: state.mode,
@@ -378,6 +407,7 @@ export function useGatewayConnection(scope: null | string) {
     loading,
     oauthConnected,
     probe,
+    probeRemoteUrl,
     probeStatus,
     providerLabel,
     remoteToken,
