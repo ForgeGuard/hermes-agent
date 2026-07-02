@@ -106,8 +106,16 @@ jobs:
       - name: Package Linux installers
         run: npm run --prefix apps/desktop dist:linux
 
+      # NOTE: github.event_name inside a called (workflow_call) workflow is
+      # always the CALLER's triggering event (e.g. `pull_request` for
+      # release-on-merge.yml) — it is never literally "workflow_call". Gate
+      # on `inputs.upload` itself (default true for both workflow_call and
+      # workflow_dispatch) rather than trying to detect the call type via
+      # event name, or this step silently no-ops for every caller. (Found
+      # 2026-07-02: this bug meant release-on-merge.yml never actually
+      # attached installers to a release.)
       - name: Upload Linux installers
-        if: github.event_name == 'push' || github.event_name == 'workflow_call' || (github.event_name == 'workflow_dispatch' && inputs.upload)
+        if: github.event_name == 'push' || inputs.upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hermes-desktop-linux
@@ -160,8 +168,9 @@ jobs:
       - name: Package macOS installers
         run: npm run --prefix apps/desktop dist:mac
 
+      # See the matching NOTE on "Upload Linux installers" above.
       - name: Upload macOS installers
-        if: github.event_name == 'push' || github.event_name == 'workflow_call' || (github.event_name == 'workflow_dispatch' && inputs.upload)
+        if: github.event_name == 'push' || inputs.upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hermes-desktop-macos
