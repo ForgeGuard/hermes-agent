@@ -1397,3 +1397,62 @@ not the specific names.
 
 Reviewers should reject new change-detector tests; authors should convert
 them into invariants before re-requesting review.
+
+---
+
+## ForgeGuard Fork — Additions Below This Line
+
+Everything above this line is inherited from upstream
+(`NousResearch/hermes-agent`) and should stay that way through future syncs —
+resolve merge conflicts in favor of upstream's wording there whenever
+possible. Everything **below** this line is fork-specific and should survive
+upstream syncs unchanged (carry it forward manually if a sync ever touches
+this file's tail).
+
+### Fork PR Policy
+
+This fork (`ForgeGuard/hermes-agent`) does **not** open pull requests against
+`NousResearch/hermes-agent` unless a human explicitly directs it to do so for
+a specific branch, at a specific time. Default behavior for all agents working
+in this repo:
+
+- All feature/fix work merges into **`ForgeGuard/hermes-agent:main`** (this
+  fork's own main), not upstream.
+- Never run `gh pr create --repo NousResearch/hermes-agent ...` (or the
+  equivalent web-UI action) speculatively "to contribute back." Treat that as
+  requiring explicit, out-of-band instruction every single time — a prior
+  approval to upstream one branch does not imply approval for any other
+  branch or a future date.
+- It is fine, and expected, to keep long-lived feature branches on this fork
+  (e.g. `feat/devcontainer`, `feature/desktop-font-size`) indefinitely as
+  candidates for a future upstream contribution — "keep the branch" and "open
+  the PR" are two separate, separately-authorized actions.
+- See `docs/fork-maintenance/upstream-sync-skill.md` for the reusable runbook
+  this fork uses to pull changes *from* `NousResearch/hermes-agent` (the
+  direction that's on by default) — contributing *to* it is the direction
+  that requires explicit sign-off.
+
+### Plan-Saving Rule (Step 0 Of Any Plan)
+
+Before starting implementation of any non-trivial, multi-step plan in this
+repo (fork or upstream), **step 0 is to save a detailed, checkbox-tracked copy
+of the approved plan** to `docs/agent-plans/` (create the directory if it
+doesn't exist yet), named `YYYY-MM-DD-<short-slug>-plan.md`. This applies
+regardless of which coding agent is doing the work (Cursor, Claude Code,
+GitHub Copilot, Codex, etc.) — the point is a durable, human-readable record
+that survives a paused session, a crashed agent, or a handoff to a different
+agent/tool.
+
+The saved plan file should include, at minimum:
+
+- The full approved plan text (context, phases, key findings/decisions).
+- A checkbox (`- [ ]` / `- [x]`) per concrete work item, updated in place as
+  work completes — this is the resumable state, not a narrative log.
+- Enough surrounding context (file paths, commit/branch names, external
+  system state discovered during research) that a fresh agent session could
+  pick the file up cold and know exactly what's done and what's left.
+
+`docs/agent-plans/` is fork-local scratch space for this workflow — it is
+distinct from the upstream-inherited `docs/plans/` directory (which holds
+upstream's own historical fix/feature plans) so the two never collide during
+a sync.

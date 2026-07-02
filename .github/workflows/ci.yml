@@ -91,7 +91,11 @@ jobs:
   contributor-check:
     name: Check contributors
     needs: detect
-    if: needs.detect.outputs.python == 'true'
+    # AUTHOR_MAP (scripts/release.py) is NousResearch's own external-contributor
+    # credit ledger for upstream releases. It is meaningless on a fork, where
+    # every commit author is fork-local and will never appear in that map —
+    # skip it here the same way docker.yml gates its Docker Hub publish job.
+    if: needs.detect.outputs.python == 'true' && github.repository == 'NousResearch/hermes-agent'
     uses: ./.github/workflows/contributor-check.yml
 
   uv-lockfile:
