@@ -125,6 +125,15 @@ jobs:
       # A release-on-merge call also passes extra_tag, e.g.
       # adm-v2026.7.1-forgeguard.1, so the exact fork release version is
       # pullable without relying on adm-latest drifting forward.
+      #
+      # NOTE: github.event_name inside a called (workflow_call) workflow is
+      # always the CALLER's triggering event (e.g. `pull_request` for
+      # release-on-merge.yml) — it is never literally "workflow_call". Gate
+      # on the `inputs.push` value itself (default true for both
+      # workflow_call and workflow_dispatch) rather than trying to detect the
+      # call type via event name, or this step silently no-ops for every
+      # caller. (Found 2026-07-02: this bug meant no ADM image had ever
+      # actually been pushed by release-on-merge.yml.)
       - name: Compute image tags
         id: tags
         run: |
@@ -139,7 +148,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Push image to GHCR
-        if: github.event_name == 'push' || ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.push)
+        if: github.event_name == 'push' || inputs.push
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
