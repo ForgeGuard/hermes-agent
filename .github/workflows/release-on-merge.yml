@@ -41,6 +41,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       base_tag: ${{ steps.version.outputs.base_tag }}
+      hermes_version: ${{ steps.version.outputs.hermes_version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -73,9 +74,17 @@ jobs:
           NEXT_N=$((LAST_N + 1))
           VERSION="${BASE_TAG}-forgeguard.${NEXT_N}"
 
+          # The upstream-tag-shaped fork version (e.g. v2026.7.1-forgeguard.1)
+          # is great for sorting/traceability but says nothing about the
+          # actual Hermes Agent product version. Surface that too, straight
+          # from pyproject.toml, so both version schemes are visible on every
+          # release (see AGENTS.md's dependency/versioning conventions).
+          HERMES_VERSION="$(grep -m1 '^version' pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
+
           echo "base_tag=$BASE_TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "::notice::Computed release version: $VERSION"
+          echo "hermes_version=$HERMES_VERSION" >> "$GITHUB_OUTPUT"
+          echo "::notice::Computed release version: $VERSION (Hermes Agent v$HERMES_VERSION)"
 
   build-desktop:
     name: Build desktop installers
@@ -113,11 +122,15 @@ jobs:
         env:
           VERSION: ${{ needs.compute-version.outputs.version }}
           BASE_TAG: ${{ needs.compute-version.outputs.base_tag }}
+          HERMES_VERSION: ${{ needs.compute-version.outputs.hermes_version }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           cat <<'NOTES' > /tmp/release-notes.md
           Fork release automatically built on merge of __PR_LINK__ into `main`.
+
+          **Hermes Agent version:** v__HERMES_VERSION__
+          **Upstream release:** [__BASE_TAG__](https://github.com/NousResearch/hermes-agent/releases/tag/__BASE_TAG__)
 
           Tracks upstream base `__BASE_TAG__`. See `docs/fork-maintenance/upstream-sync-skill.md`
           for how this fork stays current with [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent).
@@ -141,6 +154,7 @@ jobs:
           sed -i \
             -e "s/__VERSION__/${VERSION}/g" \
             -e "s/__BASE_TAG__/${BASE_TAG}/g" \
+            -e "s/__HERMES_VERSION__/${HERMES_VERSION}/g" \
             -e "s/__PR_LINK__/#${PR_NUMBER}/g" \
             /tmp/release-notes.md
 
@@ -148,9 +162,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.compute-version.outputs.version }}
+          HERMES_VERSION: ${{ needs.compute-version.outputs.hermes_version }}
         run: |
           gh release create "$VERSION" \
             release-assets/* \
             --repo "${{ github.repository }}" \
-            --title "Hermes Agent (ForgeGuard fork) ${VERSION}" \
+            --title "Hermes Agent v${HERMES_VERSION} (ForgeGuard fork ${VERSION})" \
             --notes-file /tmp/release-notes.md
